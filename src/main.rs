@@ -5,7 +5,7 @@ use std::io::{Error, Read, ErrorKind};
 use std::fs::File;
 use std::env;
 
-mod newton_ralphson;
+mod newton_raphson;
 
 fn main() -> std::io::Result<()> {
     // Get file to use else default
@@ -14,12 +14,13 @@ fn main() -> std::io::Result<()> {
     let mut file = File::open(filename)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
+    println!("Parsing input file");
     let input = json::parse(&contents).map_err(
         |_| Error::new(ErrorKind::InvalidData, "Couldn't parse input")
     )?;
     let algorithm = input["algorithm"].as_str().unwrap_or("none");
     match algorithm {
-        "newton_ralphson" => newton_ralphson::generate(&input),
+        "newton-raphson" => newton_raphson::generate(&input),
         _ => Err(Error::new(ErrorKind::InvalidData, "Unknown algorithm"))
     }
 }
