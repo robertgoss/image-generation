@@ -6,6 +6,7 @@ use std::fs::File;
 use std::env;
 
 mod newton_raphson;
+mod ray;
 
 fn main() -> std::io::Result<()> {
     // Get file to use else default
@@ -21,6 +22,7 @@ fn main() -> std::io::Result<()> {
     let algorithm = input["algorithm"].as_str().unwrap_or("none");
     match algorithm {
         "newton-raphson" => newton_raphson::generate(&input),
+        "raytrace" => ray::generate(&input),
         _ => Err(Error::new(ErrorKind::InvalidData, "Unknown algorithm"))
     }
 }
