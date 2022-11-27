@@ -7,22 +7,34 @@ use cgmath::{point3, vec3, dot, Point3, Vector3};
 
 use json::JsonValue;
 use image::{Rgb, RgbImage};
+use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 
 
 // Helper to remember which we want to always be pre-unitized
 type UnitVector3 = Vector3<f64>;
 
+#[derive(Clone, Copy)]
+struct Material {
+    colour : Rgb<u8>,
+    reflectivity : u8
+}
+
+struct Materials {
+    names : HashMap<String, Material>,
+    default : Material
+}
+
 struct Sphere {
   centre : Point3<f64>,
   radius : f64,
-  colour : Rgb<u8>
+  material : Material
 }
 
 struct Plane {
     centre : Point3<f64>,
     normal : UnitVector3,
-    colour : Rgb<u8>
+    material : Material
 }
 
 struct Ray {
@@ -31,11 +43,11 @@ struct Ray {
 }
 
 #[allow(dead_code)]
-struct Contact {
+struct Contact<'a> {
     pos : Point3<f64>,
     normal : UnitVector3,
     distance : f64,
-    colour : Rgb<u8>
+    material : &'a Material
 }
 
 struct Camera {
@@ -44,7 +56,7 @@ struct Camera {
 }
 
 trait Entity {
-    fn intersect(self : &Self, ray : &Ray) -> Option<Contact>;
+    fn intersect<'a>(self : &'a Self, ray : &Ray) -> Option<Contact<'a>>;
 }
 
 struct Scene {
@@ -56,7 +68,7 @@ struct Scene {
 }
 
 impl Sphere {
-    fn from_json(input : &JsonValue) -> Option<Box<dyn Entity>> {
+    fn from_json(input : &JsonValue, material : &Material) -> Option<Box<dyn Entity>> {
         let x = input["x"].as_f64()?;
         let y = input["y"].as_f64()?;
         let z = input["z"].as_f64()?;
@@ -66,7 +78,7 @@ impl Sphere {
                 Sphere{
                     centre : point3(x, y, z),
                     radius : r,
-                    colour : Rgb([200, 50, 50])
+                    material : *material
                 }
             )
         )
@@ -104,21 +116,21 @@ impl Entity for Sphere {
                 pos: contact_pos, 
                 normal : contact_normal,
                 distance : t_contact,
-                colour : self.colour
+                material : &self.material
             }
         )
     } 
 }
 
 impl Plane {
-    fn from_json(input : &JsonValue) -> Option<Box<dyn Entity>> {
+    fn from_json(input : &JsonValue, material : &Material) -> Option<Box<dyn Entity>> {
         let z = input["z"].as_f64()?;
         Some(
             Box::new(
                 Plane{
                     centre : point3(0.0, 0.0, z),
                     normal : vec3(0.0, 0.0, 1.0),
-                    colour : Rgb([50, 50, 200])
+                    material : *material
                 }
             )
         )
@@ -143,7 +155,7 @@ impl Entity for Plane {
                 pos: contact_pos, 
                 normal : self.normal,
                 distance : t_contact,
-                colour : self.colour
+                material : &self.material
             }
         )
     } 
@@ -159,16 +171,50 @@ impl Camera {
     }
 }
 
-fn entity_from_json(input : &JsonValue) -> Option<Box<dyn Entity>> {
+
+impl Materials {
+    fn from_json(input : &JsonValue) -> Materials {
+        let materials : HashMap<String, Material> = input["materials"].entries().filter_map(
+            |(name, value)| 
+              Material::from_json(value).map(|material| (name.to_string(), material))
+        ).collect();
+        println!("{} materials loaded", materials.len());
+        Materials {
+            names : materials,
+            default : Material { colour: Rgb([145,145,145]), reflectivity: 0 }
+        }
+    }
+
+    fn lookup<'a>(self : &'a Self, name : &str) -> &'a Material {
+        self.names.get(name).unwrap_or(&self.default)
+    }
+}
+
+impl Material {
+    fn from_json(input : &JsonValue) -> Option<Material> {
+        let r = input["r"].as_u8()?;
+        let g = input["g"].as_u8()?;
+        let b = input["b"].as_u8()?;
+        let refl = input["reflect"].as_f64()?;
+        let refl_u8 = (refl * 255.0) as u8;
+        Some(
+            Material { colour: Rgb([r,g,b]), reflectivity: refl_u8 }
+        )
+    }
+}
+
+
+fn entity_from_json(input : &JsonValue, materials : &Materials) -> Option<Box<dyn Entity>> {
     let entity_type = input["type"].as_str();
+    let material = materials.lookup(input["mat"].as_str().unwrap_or("none"));
     match entity_type {
-        Some("sphere") => Sphere::from_json(input),
-        Some("plane") => Plane::from_json(input),
+        Some("sphere") => Sphere::from_json(input, material),
+        Some("plane") => Plane::from_json(input, material),
         _ => None
     }
 }
 
-impl Contact {
+impl<'a> Contact<'a> {
     fn reflection_ray(self : &Self, ray_in : &Ray) -> Ray {
         let align = 2.0*ray_in.direction.dot(self.normal);
         let dir = ray_in.direction - align * self.normal;
@@ -211,15 +257,15 @@ impl Scene {
         } else {
             self.trace_ray(&contact.reflection_ray(ray), depth - 1)
         };
-        merge_colour(contact.colour, relfection, 124)
+        merge_colour(contact.material.colour, relfection, contact.material.reflectivity)
     }
 
-    fn from_json(input : &JsonValue) -> std::io::Result<Scene> {
+    fn from_json(input : &JsonValue, materials : &Materials) -> std::io::Result<Scene> {
         let res_x = input["resolution_x"].as_usize().unwrap_or(1024);
         let res_y = input["resolution_y"].as_usize().unwrap_or(1024);
         let max_depth = input["max_depth"].as_u8().unwrap_or(4);
         let entities : Vec<Box<dyn Entity>> = input["entities"].members().filter_map(
-            |value| entity_from_json(value) 
+            |value| entity_from_json(value, materials) 
         ).collect();
         println!("Scene has {} entities", entities.len());
         Ok(Scene {
@@ -253,7 +299,8 @@ impl Scene {
 
 pub fn generate(input : &JsonValue) -> std::io::Result<()> {
     println!("Generating ray trace scene");
-    let scene = Scene::from_json(input)?;
+    let materials = Materials::from_json(input);
+    let scene = Scene::from_json(input, &materials)?;
     let image = scene.make_image();
     image.save("output.png").map_err(
         |_| Error::new(ErrorKind::InvalidData, "Couldn't write image")
