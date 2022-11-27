@@ -51,7 +51,8 @@ struct Scene {
     camera : Camera,
     spheres : Vec<Box<dyn Entity>>,
     background : Rgb<u8>,
-    resolution : (usize, usize)
+    resolution : (usize, usize),
+    max_depth : u8
 }
 
 impl Sphere {
@@ -167,10 +168,32 @@ fn entity_from_json(input : &JsonValue) -> Option<Box<dyn Entity>> {
     }
 }
 
+impl Contact {
+    fn reflection_ray(self : &Self, ray_in : &Ray) -> Ray {
+        let align = 2.0*ray_in.direction.dot(self.normal);
+        let dir = ray_in.direction - align * self.normal;
+        Ray{start: self.pos, direction : dir}
+    }
+}
+
+fn merge_colour(c1 : Rgb<u8>, c2 : Rgb<u8>, par : u8 ) -> Rgb<u8> {
+    let inv_par = 255 - par;
+    let r1 = par as u16 * c1.0[0] as u16;
+    let g1 = par as u16 * c1.0[1] as u16;
+    let b1 = par as u16 * c1.0[2] as u16;
+    let r2 = inv_par as u16 * c2.0[0] as u16;
+    let g2 = inv_par as u16 * c2.0[1] as u16;
+    let b2 = inv_par as u16 * c2.0[2] as u16;
+    let r = (r1 + r2) / 255;
+    let g = (g1 + g2) / 255;
+    let b = (b1 + b2) / 255;
+    Rgb([r as u8, g as u8, b as u8])
+}
+
 impl Scene {
-    fn trace_ray(self : &Self, ray : &Ray, _depth : u8) -> Rgb<u8> {
+    fn trace_ray(self : &Self, ray : &Ray, depth : u8) -> Rgb<u8> {
         self.find_best_contact(ray).map(
-            |contact| contact.colour
+            |contact| self.trace_contact(ray, &contact, depth)
         ).unwrap_or(self.background)
     }
 
@@ -182,9 +205,19 @@ impl Scene {
         )
     }
 
+    fn trace_contact(self : &Self, ray : &Ray, contact : &Contact, depth : u8) -> Rgb<u8> {
+        let relfection = if depth == 0 {
+            Rgb([0,0,0])
+        } else {
+            self.trace_ray(&contact.reflection_ray(ray), depth - 1)
+        };
+        merge_colour(contact.colour, relfection, 124)
+    }
+
     fn from_json(input : &JsonValue) -> std::io::Result<Scene> {
         let res_x = input["resolution_x"].as_usize().unwrap_or(1024);
         let res_y = input["resolution_y"].as_usize().unwrap_or(1024);
+        let max_depth = input["max_depth"].as_u8().unwrap_or(4);
         let entities : Vec<Box<dyn Entity>> = input["entities"].members().filter_map(
             |value| entity_from_json(value) 
         ).collect();
@@ -193,7 +226,8 @@ impl Scene {
             camera : Camera{fov : 1.0,  pos : point3(0.0,0.0,1.0)},
             resolution : (res_x, res_y),
             background : Rgb([200,200,200]),
-            spheres : entities
+            spheres : entities,
+            max_depth : max_depth
         })
     }
 
@@ -208,7 +242,7 @@ impl Scene {
                 let x = 1.0 - (i as f64 / self.resolution.0 as f64);
                 let y = 1.0 - (j as f64 / self.resolution.1 as f64);
                 let ray = self.camera.ray(x, y);
-                let colour = self.trace_ray(&ray, 3);
+                let colour = self.trace_ray(&ray, self.max_depth);
                 img.put_pixel(i as u32, j as u32, colour);
             }
         }
