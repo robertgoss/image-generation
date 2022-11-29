@@ -10,7 +10,7 @@ mod ray;
 
 fn main() -> std::io::Result<()> {
     // Get file to use else default
-    let filename = env::args().nth(2).unwrap_or("input.json".to_string());
+    let filename = env::args().nth(1).unwrap_or("input.json".to_string());
     println!("Loading input file: {}", filename);
     let mut file = File::open(filename)?;
     let mut contents = String::new();
