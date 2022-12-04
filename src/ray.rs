@@ -2,47 +2,29 @@
 //
 // Current quadratic and only supports spheres and planes
 
-use cgmath::prelude::*;
-use cgmath::{point3, vec3, dot, Point3, Vector3};
+use cgmath::{prelude::*};
+use cgmath::{point3, vec3, Point3, Vector3, Matrix4};
 
 use json::JsonValue;
 use image::{Rgb, RgbImage};
-use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 
+mod geometry;
+mod materials;
+
+use geometry::{TraceGeometry, Ray, Geometries};
+use materials::{Material, Materials};
 
 // Helper to remember which we want to always be pre-unitized
 type UnitVector3 = Vector3<f64>;
 
-#[derive(Clone, Copy)]
-struct Material {
-    colour : Rgb<u8>,
-    reflectivity : u8
+struct Entity<'geom, 'mat> {
+    geometry : &'geom dyn TraceGeometry,
+    coords : Matrix4<f64>,
+    inv_coords : Matrix4<f64>,
+    material : &'mat Material
 }
 
-struct Materials {
-    names : HashMap<String, Material>,
-    default : Material
-}
-
-struct Sphere {
-  centre : Point3<f64>,
-  radius : f64,
-  material : Material
-}
-
-struct Plane {
-    centre : Point3<f64>,
-    normal : UnitVector3,
-    material : Material
-}
-
-struct Ray {
-    start : Point3<f64>,
-    direction : UnitVector3
-}
-
-#[allow(dead_code)]
 struct Contact<'a> {
     pos : Point3<f64>,
     normal : UnitVector3,
@@ -55,110 +37,12 @@ struct Camera {
     pos  : Point3<f64>
 }
 
-trait Entity {
-    fn intersect<'a>(self : &'a Self, ray : &Ray) -> Option<Contact<'a>>;
-}
-
-struct Scene {
+struct Scene<'mat, 'geom> {
     camera : Camera,
-    spheres : Vec<Box<dyn Entity>>,
+    spheres : Vec<Entity<'mat, 'geom>>,
     background : Rgb<u8>,
     resolution : (usize, usize),
     max_depth : u8
-}
-
-impl Sphere {
-    fn from_json(input : &JsonValue, material : &Material) -> Option<Box<dyn Entity>> {
-        let x = input["x"].as_f64()?;
-        let y = input["y"].as_f64()?;
-        let z = input["z"].as_f64()?;
-        let r = input["r"].as_f64()?;
-        Some(
-            Box::new(
-                Sphere{
-                    centre : point3(x, y, z),
-                    radius : r,
-                    material : *material
-                }
-            )
-        )
-    }
-}
-
-impl Entity for Sphere {
-    fn intersect(self : &Self, ray : &Ray) -> Option<Contact> {
-        // Basic ray intersection
-        let diff = self.centre - ray.start;
-        // Get nearest point on ray to centre
-        let t_nearest = dot(ray.direction, diff);
-        // Hit behind
-        if t_nearest < 0.0 {
-            return None;
-        }
-        let projection_nearest = diff - (ray.direction * t_nearest);
-        let dist_nearest_sq = projection_nearest.magnitude2();
-        // Ray does not contact sphere
-        let radius_sq = self.radius * self.radius;
-        if dist_nearest_sq > radius_sq {
-            return None
-        }
-        // Amount before nearest point on ray that we contact
-        let t_before = (radius_sq - dist_nearest_sq).sqrt();
-        let t_contact = t_nearest - t_before;
-        // Inside the sphere
-        if t_contact < 0.0 {
-            return None;
-        }
-        let contact_pos = ray.start + t_contact * ray.direction;
-        let contact_normal = (contact_pos - self.centre) / self.radius;
-        Some(
-            Contact { 
-                pos: contact_pos, 
-                normal : contact_normal,
-                distance : t_contact,
-                material : &self.material
-            }
-        )
-    } 
-}
-
-impl Plane {
-    fn from_json(input : &JsonValue, material : &Material) -> Option<Box<dyn Entity>> {
-        let z = input["z"].as_f64()?;
-        Some(
-            Box::new(
-                Plane{
-                    centre : point3(0.0, 0.0, z),
-                    normal : vec3(0.0, 0.0, 1.0),
-                    material : *material
-                }
-            )
-        )
-    }
-}
-
-impl Entity for Plane {
-    fn intersect(self : &Self, ray : &Ray) -> Option<Contact> {
-        // Start below
-        if ray.start.z < self.centre.z {
-            return None
-        }
-        // Not going to hit
-        if ray.direction.z >= 0.0 {
-            return None
-        }
-        // Find contact
-        let t_contact = (self.centre.z - ray.start.z) / ray.direction.z;
-        let contact_pos = ray.start + t_contact * ray.direction;
-        Some(
-            Contact { 
-                pos: contact_pos, 
-                normal : self.normal,
-                distance : t_contact,
-                material : &self.material
-            }
-        )
-    } 
 }
 
 impl Camera {
@@ -172,45 +56,32 @@ impl Camera {
 }
 
 
-impl Materials {
-    fn from_json(input : &JsonValue) -> Materials {
-        let materials : HashMap<String, Material> = input["materials"].entries().filter_map(
-            |(name, value)| 
-              Material::from_json(value).map(|material| (name.to_string(), material))
-        ).collect();
-        println!("{} materials loaded", materials.len());
-        Materials {
-            names : materials,
-            default : Material { colour: Rgb([145,145,145]), reflectivity: 0 }
-        }
+impl<'g, 'm> Entity<'g, 'm> {
+    fn from_json<'geom, 'mat>(
+        input : &JsonValue, 
+        geometries : &'geom Geometries,
+        materials : &'mat Materials
+    ) -> Option<Entity<'geom, 'mat>> {
+        let material = materials.lookup(input["mat"].as_str().unwrap_or("none"));
+        let geometry = geometries.lookup(input["geom"].as_str().unwrap_or("none"))?;
+        let x = input["x"].as_f64()?;
+        let y = input["y"].as_f64()?;
+        let z = input["z"].as_f64()?;
+        let transform = Matrix4::from_translation(vec3(x,y,z));
+        let inv = transform.invert().unwrap();
+        Some(Entity { geometry: geometry, coords: transform, inv_coords: inv, material: material }) 
     }
 
-    fn lookup<'a>(self : &'a Self, name : &str) -> &'a Material {
-        self.names.get(name).unwrap_or(&self.default)
-    }
-}
-
-impl Material {
-    fn from_json(input : &JsonValue) -> Option<Material> {
-        let r = input["r"].as_u8()?;
-        let g = input["g"].as_u8()?;
-        let b = input["b"].as_u8()?;
-        let refl = input["reflect"].as_f64()?;
-        let refl_u8 = (refl * 255.0) as u8;
-        Some(
-            Material { colour: Rgb([r,g,b]), reflectivity: refl_u8 }
-        )
-    }
-}
-
-
-fn entity_from_json(input : &JsonValue, materials : &Materials) -> Option<Box<dyn Entity>> {
-    let entity_type = input["type"].as_str();
-    let material = materials.lookup(input["mat"].as_str().unwrap_or("none"));
-    match entity_type {
-        Some("sphere") => Sphere::from_json(input, material),
-        Some("plane") => Plane::from_json(input, material),
-        _ => None
+    fn trace(&self, ray : &Ray) -> Option<Contact<'m>> {
+        let transformed_ray = ray.transform(&self.inv_coords);
+        let (t_contact, transformed_norm) = self.geometry.trace(&transformed_ray)?;
+        let normal = self.coords.transform_vector(transformed_norm);
+        Some(Contact { 
+            pos: ray.at(t_contact), 
+            normal: normal, 
+            distance: t_contact, 
+            material: &self.material
+        })
     }
 }
 
@@ -236,7 +107,7 @@ fn merge_colour(c1 : Rgb<u8>, c2 : Rgb<u8>, par : u8 ) -> Rgb<u8> {
     Rgb([r as u8, g as u8, b as u8])
 }
 
-impl Scene {
+impl<'geom, 'mat> Scene<'geom, 'mat> {
     fn trace_ray(self : &Self, ray : &Ray, depth : u8) -> Rgb<u8> {
         self.find_best_contact(ray).map(
             |contact| self.trace_contact(ray, &contact, depth)
@@ -245,7 +116,7 @@ impl Scene {
 
     fn find_best_contact(self : &Self, ray : &Ray) -> Option<Contact> {
         self.spheres.iter().filter_map(
-            |entity| entity.intersect(ray)
+            |entity| entity.trace(ray)
         ).min_by(
             |contact1, contact2| contact1.distance.partial_cmp(&contact2.distance).unwrap()
         )
@@ -260,12 +131,12 @@ impl Scene {
         merge_colour(contact.material.colour, relfection, contact.material.reflectivity)
     }
 
-    fn from_json(input : &JsonValue, materials : &Materials) -> std::io::Result<Scene> {
+    fn from_json(input : &JsonValue, geometry : &'geom Geometries, materials : &'mat Materials) -> std::io::Result<Scene<'geom, 'mat>> {
         let res_x = input["resolution_x"].as_usize().unwrap_or(1024);
         let res_y = input["resolution_y"].as_usize().unwrap_or(1024);
         let max_depth = input["max_depth"].as_u8().unwrap_or(4);
-        let entities : Vec<Box<dyn Entity>> = input["entities"].members().filter_map(
-            |value| entity_from_json(value, materials) 
+        let entities : Vec<Entity> = input["entities"].members().filter_map(
+            |value| Entity::from_json(value, geometry, materials) 
         ).collect();
         println!("Scene has {} entities", entities.len());
         Ok(Scene {
@@ -300,7 +171,8 @@ impl Scene {
 pub fn generate(input : &JsonValue) -> std::io::Result<()> {
     println!("Generating ray trace scene");
     let materials = Materials::from_json(input);
-    let scene = Scene::from_json(input, &materials)?;
+    let geometries = Geometries::from_json(input);
+    let scene = Scene::from_json(input, &geometries, &materials)?;
     let image = scene.make_image();
     image.save("output.png").map_err(
         |_| Error::new(ErrorKind::InvalidData, "Couldn't write image")

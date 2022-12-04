@@ -1,16 +1,21 @@
 {
     "algorithm" : "raytrace",
-    "resolution_x" : 1024,
-    "resolution_y" : 1024,
+    "resolution_x" : 2048,
+    "resolution_y" : 2048,
     "max_depth" : 5,
     "materials" : {
         "red" : {"r" : 200, "g" : 50, "b" : 50, "reflect": 0.5},
-        "blue" : {"r" : 50, "g" : 50, "b" : 200, "reflect": 0.8}
+        "blue" : {"r" : 50, "g" : 50, "b" : 200, "reflect": 0.8},
+        "green" : {"r" : 50, "g" : 200, "b" : 50, "reflect": 0.8}
+    },
+    "geometries" : {
+        "plane" : { "type" : "plane" },
+        "ball" : { "type" : "sphere", "radius" : 0.8 }
     },
     "entities" : [
-        { "type" : "sphere", "x" : 0, "y" : 3, "z" : 0.8, "r" : 0.8, "mat" : "red"},
-        { "type" : "sphere", "x" : 3, "y" : 6, "z" : 0.8, "r" : 0.8, "mat" : "red"},
-        { "type" : "sphere", "x" : -3, "y" : 6, "z" : 0.8, "r" : 0.8, "mat" : "red"},
-        { "type" : "plane", "z" : 0, "mat" : "blue"}
+        { "geom" : "ball", "x" : 0, "y" : 3, "z" : 0.8, "mat" : "red"},
+        { "geom" : "ball", "x" : 3, "y" : 6, "z" : 0.8, "mat" : "green"},
+        { "geom" : "ball", "x" : -3, "y" : 6, "z" : 0.8, "mat" : "green"},
+        { "geom" : "plane", "x" : 0, "y" : 0, "z" : 0, "mat" : "blue"}
     ]
 }
