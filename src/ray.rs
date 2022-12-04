@@ -3,7 +3,7 @@
 // Current quadratic and only supports spheres and planes
 
 use cgmath::{prelude::*};
-use cgmath::{point3, vec3, Point3, Vector3, Matrix4};
+use cgmath::{point3, vec3, Point3, Vector3, Matrix4, Deg};
 
 use json::JsonValue;
 use image::{Rgb, RgbImage};
@@ -67,7 +67,11 @@ impl<'g, 'm> Entity<'g, 'm> {
         let x = input["x"].as_f64()?;
         let y = input["y"].as_f64()?;
         let z = input["z"].as_f64()?;
-        let transform = Matrix4::from_translation(vec3(x,y,z));
+        let mut transform = Matrix4::from_translation(vec3(x,y,z));
+        if let Some(roll) = input["roll"].as_f64() {
+            let roll_matrix = Matrix4::from_angle_z(Deg::<f64>(roll));
+            transform = transform * roll_matrix;
+        }
         let inv = transform.invert().unwrap();
         Some(Entity { geometry: geometry, coords: transform, inv_coords: inv, material: material }) 
     }
