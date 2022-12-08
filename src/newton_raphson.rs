@@ -5,9 +5,13 @@
 
 use json::JsonValue;
 use num::complex::{Complex};
-use image::{Rgb,RgbImage};
+use image::{Rgb,RgbImage,GrayImage,Luma};
 
-use std::io::{Error, ErrorKind};
+use std::cmp::Ordering;
+
+use std::f64::consts::PI;
+
+use std::{io::{Error, ErrorKind}, collections::HashMap};
 
 struct ComplexPolynomial {
     coefficients : Vec<f64>
@@ -30,10 +34,6 @@ impl ComplexPolynomial {
         }
     }
 
-    fn order(&self) -> usize {
-        self.coefficients.len() - 1
-    }
-
     fn evaluate(&self, z : Complex<f64>) -> Complex<f64> {
         let mut acc = Complex::new(0.0, 0.0);
         let mut curr_pow = Complex::new(1.0, 0.0);
@@ -42,6 +42,81 @@ impl ComplexPolynomial {
             curr_pow *= z; 
         }
         acc
+    }
+}
+
+struct Roots {
+    tol_sqr : f64,
+    roots : Vec<Complex<f64>>,
+    colours : HashMap<u8, Rgb<u8>>,
+    white : Rgb<u8>
+}
+
+fn root_angle(principle : &Complex<f64>, root : &Complex<f64>) -> f64 {
+    let ang = root.arg() - principle.arg();
+    if ang.abs() < 1.0e-8 {
+        0.0
+    } else {
+        if ang < 0.0 {
+            ang + (2.0*PI)
+        } else {
+            ang
+        }
+    }
+}
+
+fn root_compare(principle : &Complex<f64>, root1 : &Complex<f64>, root2 : &Complex<f64>) -> Ordering {
+    root_angle(principle, root1).partial_cmp(
+        &root_angle(principle, root2)
+    ).unwrap()
+} 
+
+impl Roots {
+    fn new(eps : f64) -> Roots {
+        Roots { 
+            tol_sqr: eps * eps, 
+            roots: Vec::new(), 
+            colours: HashMap::new(),
+            white : Rgb([255,255,255])
+         }
+    }
+
+    fn add_root(&mut self, root : &Complex<f64>) -> u8 {
+        for (i, z) in self.roots.iter().enumerate() {
+            if (root - z).norm_sqr() < self.tol_sqr {
+                return i as u8;
+            }
+        };
+        let index = self.roots.len();
+        self.roots.push(*root);
+        index as u8
+    }
+
+    fn root_colour(&self, index : u8) -> &Rgb<u8> {
+        self.colours.get(&index).unwrap_or(&self.white)
+    }
+
+    fn principle_root(&self) -> Complex<f64> {
+        *self.roots.iter().max_by(
+            |&root1, &root2| root1.im.partial_cmp(&root2.im).unwrap()
+        ).unwrap()
+    }
+
+    fn make_colours(&mut self) {
+        if self.roots.len() == 0 {
+            return;
+        }
+        // Make colours for each root when we have them all
+        let mut indices = Vec::from_iter(0..self.roots.len());
+        let p_root = self.principle_root();
+        indices.sort_by(
+            |i, j| root_compare(&p_root, &self.roots[*i], &self.roots[*j]) 
+        );
+        let root_num = self.roots.len();
+        for (i, root_i) in indices.iter().enumerate() {
+            let hue : f64 = 360.0 * i as f64 / root_num as f64;
+            self.colours.insert(*root_i as u8, make_base_rgb(hue));
+        }
     }
 }
 
@@ -65,29 +140,6 @@ fn make_base_rgb(hue : f64) -> Rgb<u8> {
     } else {
         Rgb([255, 0, x])
     }
-}
-
-// Given a root 
-//    if it is in the list return it's colour.
-//    if it isnt add it
-fn find_root_colour(
-    root_colours : &mut Vec<(Complex<f64>, Rgb<u8>)>, 
-    root : &Complex<f64>, 
-    root_num : usize,
-    eps : f64
-) -> Rgb<u8> {
-    let eps_sq = eps*eps;
-    let found = root_colours.iter().find(
-        |&(x,_)| (root - x).norm_sqr() < eps_sq
-    );
-    if found.is_some() {
-        return found.unwrap().1;
-    }
-    let index = root_colours.len();
-    let hue : f64 = 360.0 * index as f64 / root_num as f64; 
-    let colour = make_base_rgb(hue);
-    root_colours.push((*root, colour));
-    colour
 }
 
 fn scale_colour(val : u8, colour : &Rgb<u8>) -> Rgb<u8> {
@@ -157,28 +209,50 @@ impl NewtonRaphson {
         );
         let start_x = self.centre.0 - (self.resolution.0 as f64 / (2.0 / self.scale));
         let start_y = self.centre.1 - (self.resolution.1 as f64 / (2.0 / self.scale));
-        let root_num = self.polynomial.order();
-        // Map from roots to colours
-        let mut root_colours : Vec<(Complex<f64>, Rgb<u8>)> = Vec::new();
-        for i in 0..self.resolution.0 {
-            for j in 0..self.resolution.1 {
+        // Make an image of the iteration count - and record the roots found so we can
+        // colour them - this is needed to make the colourings stable
+        // and the index of the colour
+        let mut depth_img = GrayImage::new(
+            self.resolution.0 as u32, 
+            self.resolution.1 as u32
+        );
+        let mut root_img = GrayImage::new(
+            self.resolution.0 as u32, 
+            self.resolution.1 as u32
+        );
+        let mut roots = Roots::new(self.convergence * 4.0);
+        let mut max_iter : usize = 0;
+        for i in 0..(self.resolution.0 as u32) {
+            for j in 0..(self.resolution.1 as u32) {
                 let x = start_x + (i as f64 * self.scale);
                 let y = start_y + (j as f64 * self.scale);
                 let (n,root) = self.converge(Complex::new(x, y));
-                let base_colour = match (self.use_colour, root) {
-                    (true, Some(z)) => 
-                      find_root_colour(
-                        &mut root_colours,
-                        &z, 
-                        root_num,
-                        3.0*self.convergence
-                      ),
-                    _ => Rgb([255,255,255])
+                if self.use_colour {
+                    if let Some(root_val) = root {
+                        let root_index = roots.add_root(&root_val);
+                        root_img.put_pixel(i, j, Luma([root_index]));
+                    }
+                }
+                if n > max_iter {
+                    max_iter = n;
+                }
+                depth_img.put_pixel(i, j, Luma([n as u8]));
+            }
+        }
+        // Now we have the roots we can stabley colour them
+        roots.make_colours();
+        let white : Rgb<u8> = Rgb([255,255,255]);
+        // Make the colour image
+        for i in 0..(self.resolution.0 as u32) {
+            for j in 0..(self.resolution.1 as u32) {
+                let n = depth_img.get_pixel(i, j).0[0] as usize;
+                let val = (n * 255) / max_iter;
+                let root_colour = if self.use_colour {
+                    roots.root_colour(root_img.get_pixel(i,j).0[0])
+                } else {
+                    &white
                 };
-                let val = (n * 255) / self.max_iterations;
-
-                let pixel = scale_colour(val as u8, &base_colour);
-                img.put_pixel(i as u32, j as u32, pixel);
+                img.put_pixel(i, j, scale_colour(val as u8, root_colour));
             }
         }
         img
@@ -186,11 +260,8 @@ impl NewtonRaphson {
 
 }
 
-pub fn generate(input : &JsonValue) -> std::io::Result<()> {
+pub fn generate(input : &JsonValue) -> std::io::Result<RgbImage> {
     println!("Generating newton raphson image");
     let nr = NewtonRaphson::from_json(input)?;
-    let image = nr.make_image();
-    image.save("output.png").map_err(
-        |_| Error::new(ErrorKind::InvalidData, "Couldn't write image")
-    )
+    Ok(nr.make_image())
 }

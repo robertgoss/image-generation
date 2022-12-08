@@ -1,0 +1,19 @@
+{
+    "algorithm" : "animation",
+    "frames_count" : 600,
+    "base" : {
+        "algorithm" : "newton-raphson",
+        "polynomial" : [1, 0.001, 0, 20, 0, 0.001, 1],
+        "resolution_x" : 1024,
+        "resolution_y" : 1024,
+        "max_iterations" : 128,
+        "colour" : false,
+        "centre_x" : 0.0001,
+        "centre_y" : 0.0001,
+        "size": 1.0
+    },
+    "mods" : [
+        {"param" : "polynomial/3" , "coeff" : [0.2, 0.7, 0.10]},
+        {"param" : "polynomial/6" , "coeff" : [-0.7, 1.0]}
+    ]
+}

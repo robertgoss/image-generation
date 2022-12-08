@@ -7,7 +7,6 @@ use cgmath::{point3, vec3, Point3, Vector3, Matrix4, Deg};
 
 use json::JsonValue;
 use image::{Rgb, RgbImage};
-use std::io::{Error, ErrorKind};
 
 mod geometry;
 mod materials;
@@ -172,13 +171,10 @@ impl<'geom, 'mat> Scene<'geom, 'mat> {
     }
 }
 
-pub fn generate(input : &JsonValue) -> std::io::Result<()> {
+pub fn generate(input : &JsonValue) -> std::io::Result<RgbImage> {
     println!("Generating ray trace scene");
     let materials = Materials::from_json(input);
     let geometries = Geometries::from_json(input);
     let scene = Scene::from_json(input, &geometries, &materials)?;
-    let image = scene.make_image();
-    image.save("output.png").map_err(
-        |_| Error::new(ErrorKind::InvalidData, "Couldn't write image")
-    )
+    Ok(scene.make_image())
 }
