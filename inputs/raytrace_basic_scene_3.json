@@ -1,0 +1,32 @@
+{
+    "algorithm" : "raytrace",
+    "resolution_x" : 2048,
+    "resolution_y" : 2048,
+    "max_depth" : 5,
+    "materials" : {
+        "red" : {"type" : "colour", "r" : 200, "g" : 50, "b" : 50, "reflect": 0.2},
+        "blue" : {"type" : "colour","r" : 50, "g" : 50, "b" : 200, "reflect": 0.2},
+        "green" : {"type" : "colour","r" : 50, "g" : 200, "b" : 50, "reflect": 0.2},
+        "green_shiny" : {"type" : "colour", "r" : 50, "g" : 200, "b" : 50, "reflect": 0.3},
+        "white_shiny" : {"type" : "colour", "r" : 200, "g" : 200, "b" : 200, "reflect": 0.3},
+        "black_shiny" : {"type" : "colour", "r" : 5, "g" : 5, "b" : 5, "reflect": 0.3},
+        "metal" : {"type" : "colour", "r" : 50, "g" : 50, "b" : 50, "reflect": 0.3},
+        "checker" : {"type" : "checker", "step" : 0.6, "odd" : "white_shiny", "even" : "black_shiny"}
+    },
+    "geometries" : {
+        "plane" : { "type" : "plane" },
+        "ball" : { "type" : "sphere", "radius" : 0.8 },
+        "big_ball" : { "type" : "sphere", "radius" : 3.2},
+        "small_cube" : { "type" : "box", "x" : 0.5, "y" : 0.5, "z" : 0.5 },
+        "tall_box" : { "type" : "box", "x" : 0.5, "y" : 0.5, "z" : 2 }
+    },
+    "entities" : [
+        { "geom" : "small_cube", "roll" : 15, "x" : 0, "y" : 3, "z" : 0.25, "mat" : "red"},
+        { "geom" : "small_cube", "roll" : -25, "x" : 1, "y" : 3, "z" : 0.25, "mat" : "red"},
+        { "geom" : "tall_box", "roll" : 25, "x" : -1, "y" : 4, "z" : 1, "mat" : "green_shiny"},
+        { "geom" : "ball", "x" : 3, "y" : 6, "z" : 0.8, "mat" : "green"},
+        { "geom" : "ball", "x" : -3, "y" : 6, "z" : 0.8, "mat" : "green"},
+        { "geom" : "big_ball", "x" : -1, "y" : 10, "z" : 3.2, "mat" : "metal"},
+        { "geom" : "plane", "x" : 0.2, "y" : 0, "z" : 0, "mat" : "checker"}
+    ]
+}
