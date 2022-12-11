@@ -17,11 +17,11 @@ use materials::{Material, Materials};
 // Helper to remember which we want to always be pre-unitized
 type UnitVector3 = Vector3<f64>;
 
-struct Entity<'geom, 'mat> {
-    geometry : &'geom dyn TraceGeometry,
+struct Entity<'a> {
+    geometry : &'a dyn TraceGeometry,
     coords : Matrix4<f64>,
     inv_coords : Matrix4<f64>,
-    material : &'mat dyn Material
+    material : &'a dyn Material
 }
 
 struct Contact<'a> {
@@ -37,9 +37,10 @@ struct Camera {
     pos  : Point3<f64>
 }
 
-struct Scene<'mat, 'geom> {
+struct Scene<'a> {
     camera : Camera,
-    spheres : Vec<Entity<'mat, 'geom>>,
+    materials : &'a Materials,
+    spheres : Vec<Entity<'a>>,
     background : Rgb<u8>,
     resolution : (usize, usize),
     max_depth : u8
@@ -56,12 +57,12 @@ impl Camera {
 }
 
 
-impl<'g, 'm> Entity<'g, 'm> {
-    fn from_json<'geom, 'mat>(
+impl<'a> Entity<'a> {
+    fn from_json(
         input : &JsonValue, 
-        geometries : &'geom Geometries,
-        materials : &'mat Materials
-    ) -> Option<Entity<'geom, 'mat>> {
+        geometries : &'a Geometries,
+        materials : &'a Materials
+    ) -> Option<Entity<'a>> {
         let material = materials.lookup(input["mat"].as_str().unwrap_or("none"));
         let geometry = geometries.lookup(input["geom"].as_str().unwrap_or("none"))?;
         let x = input["x"].as_f64()?;
@@ -76,7 +77,7 @@ impl<'g, 'm> Entity<'g, 'm> {
         Some(Entity { geometry: geometry, coords: transform, inv_coords: inv, material: material }) 
     }
 
-    fn trace(&self, ray : &Ray) -> Option<Contact<'m>> {
+    fn trace(&self, ray : &Ray) -> Option<Contact<'a>> {
         let transformed_ray = ray.transform(&self.inv_coords);
         let (t_contact, transformed_norm) = self.geometry.trace(&transformed_ray)?;
         let normal = self.coords.transform_vector(transformed_norm);
@@ -98,7 +99,7 @@ impl<'a> Contact<'a> {
     }
 }
 
-impl<'geom, 'mat> Scene<'geom, 'mat> {
+impl<'a> Scene<'a> {
     fn trace_ray(self : &Self, ray : &Ray, depth : u8) -> Rgb<u8> {
         self.find_best_contact(ray).map(
             |contact| self.trace_contact(ray, &contact, depth)
@@ -119,10 +120,16 @@ impl<'geom, 'mat> Scene<'geom, 'mat> {
         } else {
             Some(self.trace_ray(&contact.reflection_ray(ray), depth - 1))
         };
-        contact.material.colour(&contact.local_pos, relfection)
+        contact.material.colour(self.materials, &contact.local_pos, relfection)
     }
 
-    fn from_json(input : &JsonValue, geometry : &'geom Geometries, materials : &'mat Materials) -> std::io::Result<Scene<'geom, 'mat>> {
+    fn from_json<'geom, 'mat>(
+        input : &JsonValue, 
+        geometry : &'geom Geometries, 
+        materials : &'mat Materials
+    ) -> std::io::Result<Scene<'a>> 
+    where 'geom : 'a, 'mat : 'a
+    {
         let res_x = input["resolution_x"].as_usize().unwrap_or(1024);
         let res_y = input["resolution_y"].as_usize().unwrap_or(1024);
         let max_depth = input["max_depth"].as_u8().unwrap_or(4);
@@ -135,7 +142,8 @@ impl<'geom, 'mat> Scene<'geom, 'mat> {
             resolution : (res_x, res_y),
             background : Rgb([200,200,200]),
             spheres : entities,
-            max_depth : max_depth
+            max_depth : max_depth,
+            materials : materials
         })
     }
 

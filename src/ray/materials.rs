@@ -9,38 +9,54 @@ pub struct Colour {
 }
 
 pub struct Checker {
-    step : f64
+    step : f64,
+    material_odd : usize,
+    material_even : usize,
 }
 
+// Internally materials that want the reference others store a inddex to the materials
+// vector. 
 pub struct Materials {
-    names : HashMap<String, Box<dyn Material>>,
+    names : HashMap<String, usize>,
+    materials : Vec<Box<dyn Material>>,
     default : Colour
 }
 
 impl Materials {
     pub fn from_json(input : &JsonValue) -> Materials {
-        let materials : HashMap<String, Box<dyn Material>> = input["materials"].entries().filter_map(
-            |(name, value)| 
-              parse_material(value).map(|material| (name.to_string(), material))
-        ).collect();
-        println!("{} materials loaded", materials.len());
-        Materials {
-            names : materials,
+        let mut materials = Materials {
+            names : HashMap::new(),
+            materials : Vec::new(),
             default : Colour { colour: Rgb([145,145,145]), reflectivity: 0 }
+        };
+        for (mat_name, mat_input) in input["materials"].entries() {
+            if let Some(mat) = parse_material(mat_input, &materials) {
+                let index = materials.materials.len();
+                materials.materials.push(mat);
+                materials.names.insert(mat_name.to_string(), index);
+            }
         }
+        println!("{} materials loaded", materials.names.len());
+        materials
     }
 
-    pub fn lookup<'a>(self : &'a Self, name : &str) -> &'a dyn Material {
-        self.names.get(name).map(
-            |boxed| boxed.as_ref()
+    pub fn lookup(&self, name : &str) -> &dyn Material {
+        self.names.get(name).and_then(
+            |index| self.materials.get(*index).map(
+                |boxed| boxed.as_ref()
+            )
         ).unwrap_or(&self.default)
+    }
+
+    pub fn lookup_index(&self, name : &str) -> Option<usize> {
+        self.names.get(name).cloned()
     }
 }
 
-fn parse_material(input : &JsonValue) -> Option<Box<dyn Material>> {
+fn parse_material(input : &JsonValue, materials : &Materials) -> Option<Box<dyn Material>> {
     match input["type"].as_str() {
         Some("colour") => Colour::from_json(input),
-        Some("checker") => Checker::from_json(input),
+        Some("checker") => Checker::from_json(input, materials),
         _ => None
     }
 }
@@ -60,7 +76,12 @@ fn merge_colour(c1 : Rgb<u8>, c2 : Rgb<u8>, par : u8 ) -> Rgb<u8> {
 }
 
 pub trait Material {
-    fn colour(&self, local : &Point3<f64>, reflection : Option<Rgb<u8>>) -> Rgb<u8>;
+    fn colour(
+        &self, 
+        mats : &Materials,
+        local : &Point3<f64>, 
+        reflection : Option<Rgb<u8>>
+    ) -> Rgb<u8>;
 }
 
 impl Colour {
@@ -79,11 +100,19 @@ impl Colour {
 }
 
 impl Checker {
-    pub fn from_json(input : &JsonValue) -> Option<Box<dyn Material>> {
+    pub fn from_json(input : &JsonValue, materials : &Materials) -> Option<Box<dyn Material>> {
         let step = input["step"].as_f64().unwrap_or(1.0);
+        let name_even = input["odd"].as_str()?;
+        let name_odd = input["even"].as_str()?;
+        let index_even = materials.lookup_index(name_even)?;
+        let index_odd = materials.lookup_index(name_odd)?;
         Some(
             Box::new(
-                Checker { step: step }
+                Checker { 
+                    step: step, 
+                    material_even : index_even,
+                    material_odd : index_odd
+                }
             )
         )
     }
@@ -92,6 +121,7 @@ impl Checker {
 impl Material for Colour {
     fn colour(
         &self,
+        _mats : &Materials,
         _local_point : &Point3<f64>,
         reflection : Option<Rgb<u8>>
     ) -> Rgb<u8> {
@@ -106,16 +136,14 @@ impl Material for Colour {
 impl Material for Checker {
     fn colour(
         &self,
+        mats : &Materials,
         local_point : &Point3<f64>,
-        _reflection : Option<Rgb<u8>>,
+        reflection : Option<Rgb<u8>>,
     ) -> Rgb<u8> {
         let x = (local_point.x * self.step) as i64;
         let y = (local_point.y * self.step) as i64;
         let z = (local_point.z * self.step) as i64;
-        if (x+y+z) % 2 == 0 {
-            Rgb([0,0,0])
-        } else {
-            Rgb([255,255,255])
-        }
+        let index = if (x+y+z) % 2 == 0 { self.material_even } else { self.material_odd };
+        mats.materials[index].colour(mats, local_point, reflection)
     }
 }
