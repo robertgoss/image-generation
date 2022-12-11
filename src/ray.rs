@@ -21,14 +21,15 @@ struct Entity<'geom, 'mat> {
     geometry : &'geom dyn TraceGeometry,
     coords : Matrix4<f64>,
     inv_coords : Matrix4<f64>,
-    material : &'mat Material
+    material : &'mat dyn Material
 }
 
 struct Contact<'a> {
     pos : Point3<f64>,
+    local_pos : Point3<f64>,
     normal : UnitVector3,
     distance : f64,
-    material : &'a Material
+    material : &'a dyn Material
 }
 
 struct Camera {
@@ -80,10 +81,11 @@ impl<'g, 'm> Entity<'g, 'm> {
         let (t_contact, transformed_norm) = self.geometry.trace(&transformed_ray)?;
         let normal = self.coords.transform_vector(transformed_norm);
         Some(Contact { 
-            pos: ray.at(t_contact), 
+            pos : ray.at(t_contact),
+            local_pos: transformed_ray.at(t_contact), 
             normal: normal, 
             distance: t_contact, 
-            material: &self.material
+            material: self.material
         })
     }
 }
@@ -94,20 +96,6 @@ impl<'a> Contact<'a> {
         let dir = ray_in.direction - align * self.normal;
         Ray{start: self.pos, direction : dir}
     }
-}
-
-fn merge_colour(c1 : Rgb<u8>, c2 : Rgb<u8>, par : u8 ) -> Rgb<u8> {
-    let inv_par = 255 - par;
-    let r1 = par as u16 * c1.0[0] as u16;
-    let g1 = par as u16 * c1.0[1] as u16;
-    let b1 = par as u16 * c1.0[2] as u16;
-    let r2 = inv_par as u16 * c2.0[0] as u16;
-    let g2 = inv_par as u16 * c2.0[1] as u16;
-    let b2 = inv_par as u16 * c2.0[2] as u16;
-    let r = (r1 + r2) / 255;
-    let g = (g1 + g2) / 255;
-    let b = (b1 + b2) / 255;
-    Rgb([r as u8, g as u8, b as u8])
 }
 
 impl<'geom, 'mat> Scene<'geom, 'mat> {
@@ -127,11 +115,11 @@ impl<'geom, 'mat> Scene<'geom, 'mat> {
 
     fn trace_contact(self : &Self, ray : &Ray, contact : &Contact, depth : u8) -> Rgb<u8> {
         let relfection = if depth == 0 {
-            Rgb([0,0,0])
+            None
         } else {
-            self.trace_ray(&contact.reflection_ray(ray), depth - 1)
+            Some(self.trace_ray(&contact.reflection_ray(ray), depth - 1))
         };
-        merge_colour(contact.material.colour, relfection, contact.material.reflectivity)
+        contact.material.colour(&contact.local_pos, relfection)
     }
 
     fn from_json(input : &JsonValue, geometry : &'geom Geometries, materials : &'mat Materials) -> std::io::Result<Scene<'geom, 'mat>> {
