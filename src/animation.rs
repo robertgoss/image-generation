@@ -22,7 +22,8 @@ impl Modifications {
 // given time
 struct ModificationPoly {
     param_path : Vec<String>,
-    coefficients : Vec<f64>
+    coefficients : Vec<f64>,
+    to_int : bool
 }
 
 fn set_json_param(
@@ -57,11 +58,12 @@ impl ModificationPoly {
         if !input["coeff"].is_array() {
             return None;
         }
+        let is_int = input["integral"].as_bool().unwrap_or(false);
         let coefficients : Vec<f64> = input["coeff"].members().filter_map(
             |i| i.as_f64()
         ).rev().collect();
         Some(
-            ModificationPoly { param_path: path, coefficients: coefficients }
+            ModificationPoly { param_path: path, coefficients: coefficients, to_int : is_int }
         )
     }
 
@@ -69,18 +71,22 @@ impl ModificationPoly {
         set_json_param(
             input, 
             &self.param_path, 
-            JsonValue::from(self.evaluate(time))
+            self.evaluate(time)
         )
     }
 
-    fn evaluate(&self, time : f64) -> f64 {
+    fn evaluate(&self, time : f64) -> JsonValue {
         let mut acc = 0.0;
         let mut curr_pow = 1.0;
         for coeff in self.coefficients.iter() {
             acc += coeff * curr_pow;
             curr_pow *= time; 
         }
-        acc
+        if self.to_int {
+            JsonValue::from(acc.round() as i64)
+        } else {
+            JsonValue::from(acc)
+        }
     }
 }
 

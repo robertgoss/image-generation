@@ -12,13 +12,14 @@ use json::JsonValue;
 mod newton_raphson;
 mod ray;
 mod animation;
-
+mod l_system;
 
 fn make_image(input : &JsonValue) -> std::io::Result<RgbImage> {
     let algorithm = input["algorithm"].as_str().unwrap_or("none");
     match algorithm {
         "newton-raphson" => newton_raphson::generate(&input),
         "raytrace" => ray::generate(&input),
+        "l_system" => l_system::generate(&input),
         _ => Err(Error::new(ErrorKind::InvalidData, "Unknown algorithm"))
     }
 }

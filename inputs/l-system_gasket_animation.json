@@ -1,0 +1,27 @@
+{
+    "algorithm" : "animation",
+    "frames_count" : 10,
+    "base" : {
+        "algorithm" : "l_system",
+        "resolution_x" : 2048,
+        "resolution_y" : 2048,
+        "depth" : 10,
+        "axiom" : "Fr",
+        "forward" : 1,
+        "turn" : 60,
+        "rules" : {
+            "Fl" : "Fr,+,Fl,+,Fr",
+            "Fr" : "Fl,-,Fr,-,Fl"
+        },
+        "draw_instructions" : {
+            "Fl" : "F",
+            "Fr" : "F",
+            "f" : "f",
+            "+" : "+",
+            "-" : "-"
+        }
+    },
+    "mods" : [
+        {"param" : "depth" , "coeff" : [10.0, 0.0], "integral" : true}
+    ]
+}
