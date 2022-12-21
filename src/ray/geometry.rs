@@ -53,7 +53,7 @@ impl Ray2d {
 }
 
 struct Cylinder {
-    length : f64,
+    half_length : f64,
     radius : f64
 }
 
@@ -199,23 +199,23 @@ impl TraceGeometry for Cylinder {
     fn trace(&self, ray : &Ray) -> Option<(f64, UnitVector3)> {
         let ray2d = ray.xy();
         let radius2 = self.radius * self.radius;
-        if ray.start.z <= 0.0 {
+        if ray.start.z <= -self.half_length {
             // Test hit start
             if ray.direction.z <= 0.0 {
                 return None
             }
-            let t_contact_base = -ray.start.z / ray.direction.z;
+            let t_contact_base = -(ray.start.z + self.half_length) / ray.direction.z;
             let base_vec = ray2d.at(t_contact_base).to_vec();
             if base_vec.magnitude2() < radius2 {
                 return Some((t_contact_base, vec3(0.0, 0.0, -1.0))) 
             }
         }
-        if ray.start.z >= self.length {
+        if ray.start.z >= self.half_length {
             // Test hit end
             if ray.direction.z >= 0.0 {
                 return None
             }
-            let t_contact_top = -(ray.start.z - self.length) / ray.direction.z;
+            let t_contact_top = -(ray.start.z - self.half_length) / ray.direction.z;
             let top_vec = ray2d.at(t_contact_top).to_vec();
             if top_vec.magnitude2() < radius2 {
                 return Some((t_contact_top, vec3(0.0, 0.0, 1.0))) 
@@ -250,7 +250,7 @@ impl TraceGeometry for Cylinder {
         let pos = ray.at(t_contact).to_vec();
         let pos2 = vec2(pos.x, pos.y).normalize();
         // Check the z range
-        if pos.z < 0.0 || pos.z > self.length {
+        if pos.z.abs() > self.half_length {
             return None;
         }
         Some(
@@ -324,7 +324,7 @@ impl Cylinder {
             Box::new(
                 Cylinder {
                     radius : r,
-                    length : l
+                    half_length : l / 2.0
                 }
             )
         )
@@ -477,10 +477,10 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_under_hit() {
-        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
         // Fire directy up ( under)
         let trace = cylinder.trace(&
-            Ray {start : point3(0.0,0.0,-1.0), direction : vec3(0.0,0.0,1.0)}
+            Ray {start : point3(0.0,0.0,-1.5), direction : vec3(0.0,0.0,1.0)}
         );
         // Hit
         assert!(trace.is_some());
@@ -490,7 +490,7 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_under_miss_dir() {
-        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
         // Fire directy up ( under)
         let trace = cylinder.trace(&
             Ray {start : point3(0.0,0.0,-1.0), direction : vec3(0.0,0.0,-1.0)}
@@ -501,7 +501,7 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_under_miss_pos() {
-        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
         // Fire directy up ( under)
         let trace = cylinder.trace(&
             Ray {start : point3(2.0,0.0,-1.0), direction : vec3(0.0,0.0,1.0)}
@@ -512,10 +512,10 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_over_hit() {
-        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
         // Fire directy up ( under)
         let trace = cylinder.trace(&
-            Ray {start : point3(0.0,0.0,2.0), direction : vec3(0.0,0.0,-1.0)}
+            Ray {start : point3(0.0,0.0,1.5), direction : vec3(0.0,0.0,-1.0)}
         );
         // Hit
         assert!(trace.is_some());
@@ -525,7 +525,7 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_over_miss_dir() {
-        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
         // Fire directy up ( under)
         let trace = cylinder.trace(&
             Ray {start : point3(0.0,0.0,2.0), direction : vec3(0.0,0.0,1.0)}
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_over_miss_pos() {
-        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
         // Fire directy up ( under)
         let trace = cylinder.trace(&
             Ray {start : point3(2.0,0.0,2.0), direction : vec3(0.0,0.0,-1.0)}
@@ -547,10 +547,10 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_horizontal_hit() {
-        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
         // Fire directy up ( under)
         let trace = cylinder.trace(&
-            Ray {start : point3(2.0,0.0,0.5), direction : vec3(-1.0,0.0,0.0)}
+            Ray {start : point3(2.0,0.0,0.0), direction : vec3(-1.0,0.0,0.0)}
         );
         // Hit
         assert!(trace.is_some());
@@ -560,11 +560,11 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_slant_hit() {
-        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
         let l :f64 = 1.0 / 2.0_f64.sqrt();
         // Fire directy up ( under)
         let trace = cylinder.trace(&
-            Ray {start : point3(-1.0,0.0,0.75), direction : vec3(l,0.0,-l)}
+            Ray {start : point3(-1.0,0.0,0.25), direction : vec3(l,0.0,-l)}
         );
         // Hit
         assert!(trace.is_some());
