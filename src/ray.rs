@@ -17,6 +17,8 @@ mod materials;
 use geometry::{TraceGeometry, Ray, Geometries};
 use materials::{Material, Materials};
 
+use self::geometry::AABox;
+
 // Helper to remember which we want to always be pre-unitized
 type UnitVector3 = Vector3<f64>;
 
@@ -38,13 +40,14 @@ struct Contact<'a> {
 struct Camera {
     fov : f64,
     pos  : Point3<f64>,
-    mat : Matrix3<f64>
+    mat : Matrix3<f64>,
+    automatic : bool, // Fit the whole scene in camera
 }
 
 struct Scene<'a> {
     camera : Camera,
     materials : &'a Materials,
-    spheres : Vec<Entity<'a>>,
+    entities : Vec<Entity<'a>>,
     background : Rgb<u8>,
     background_illumination : u8,
     use_ambiant_illumination : bool,
@@ -63,22 +66,34 @@ impl Camera {
     }
 
     fn from_json(input : &JsonValue) -> Option<Camera> {
-        let x = input["x"].as_f64()?;
-        let y = input["y"].as_f64()?;
-        let z = input["z"].as_f64()?;
         let fov = input["fov"].as_f64().unwrap_or(1.0);
         let dir_x = input["dir_x"].as_f64()?;
         let dir_y = input["dir_y"].as_f64()?;
         let dir_z = input["dir_z"].as_f64()?;
-        let mat = Matrix3::look_at_lh(
-            point3(0.0,0.0,0.0), 
-            point3(dir_x, dir_y, dir_z), 
-            vec3(0.0, 0.0, 1.0)
-        );
+        let dir_vec : Vector3<f64> = vec3(dir_x, dir_y, dir_z).normalize();
+        let z_vec = vec3(0.0, 0.0, 1.0);
+        let mat = if dir_vec.dot(-z_vec).abs() > 1.0-1e-10 {
+            let x_vec = vec3(1.0, 0.0, 0.0);
+            let y_vec = vec3(0.0, 1.0, 0.0);
+            Matrix3 { x: x_vec, y: y_vec, z: -z_vec }
+        } else {
+            Matrix3::look_at_lh(
+                point3(0.0,0.0,0.0), 
+                point3(dir_x, dir_y, dir_z), 
+                vec3(0.0, 0.0, 1.0)
+            )
+        };
+        let automatic = input["automatic"].as_bool().unwrap_or(false);
+        // Set the generic 
+        let x = input["x"].as_f64()?;
+        let y = input["y"].as_f64()?;
+        let z = input["z"].as_f64()?;
+        let pos = point3(x, y, z);
         Some(Camera {
-            pos : point3(x, y, z),
+            pos : pos,
             mat : mat,
-            fov : fov
+            fov : fov,
+            automatic : automatic
         })
     }
 }
@@ -201,7 +216,7 @@ impl<'a> Scene<'a> {
     }
 
     fn find_best_contact(self : &Self, ray : &Ray) -> Option<Contact> {
-        self.spheres.iter().filter_map(
+        self.entities.iter().filter_map(
             |entity| entity.trace(ray)
         ).min_by(
             |contact1, contact2| contact1.distance.partial_cmp(&contact2.distance).unwrap()
@@ -300,11 +315,21 @@ impl<'a> Scene<'a> {
             resolution : (res_x, res_y),
             background : Rgb([200,200,200]),
             background_illumination : 240,
-            spheres : entities,
+            entities : entities,
             max_depth : max_depth,
             materials : materials,
             use_ambiant_illumination: use_ambiant
         })
+    }
+
+    fn bound_scene(&self) -> geometry::AABox {
+        let inital = geometry::AABox {
+            min : self.camera.pos,
+            max : self.camera.pos
+        };
+        self.entities.iter().filter_map(
+            |entity| entity.geometry.bound(&entity.coords)
+        ).fold(inital, |aabox : AABox, other| aabox.merge(&other))
     }
 
 
@@ -325,12 +350,24 @@ impl<'a> Scene<'a> {
 
         img
     }
+
+    fn setup_camera(&mut self) {
+        if !self.camera.automatic {
+            return;
+        }
+        let bound = self.bound_scene();
+        let centre = bound.mid();
+        let radius = bound.radius();
+        let pos = centre - self.camera.mat.z * radius;
+        self.camera.pos = pos;
+    }
 }
 
 pub fn generate(input : &JsonValue) -> std::io::Result<RgbImage> {
     println!("Generating ray trace scene");
     let materials = Materials::from_json(input);
     let geometries = Geometries::from_json(input);
-    let scene = Scene::from_json(input, &geometries, &materials)?;
+    let mut scene = Scene::from_json(input, &geometries, &materials)?;
+    scene.setup_camera();
     Ok(scene.make_image())
 }

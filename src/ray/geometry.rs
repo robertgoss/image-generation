@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 
-use cgmath::prelude::*;
-use cgmath::{point2, vec2, vec3, dot, Point2, Point3, Vector2, Vector3, Matrix4};
+use cgmath::{prelude::*, point3};
+use cgmath::{point2, vec2, vec3, dot, Point2, Point3, Vector2, Vector3, Matrix4, EuclideanSpace};
 use json::JsonValue;
 
 // Helper to remember which we want to always be pre-unitized
@@ -62,6 +62,12 @@ struct OriginBox {
     half_dimensions : Vector3<f64>
 }
 
+// A axis aligned box to bound geomenty
+pub struct AABox {
+    pub min : Point3<f64>,
+    pub max : Point3<f64>
+}
+
 // Sphere at the origin of a given radius
 struct Sphere {
     radius : f64
@@ -73,6 +79,8 @@ struct Plane;
 
 pub trait TraceGeometry {
     fn trace(&self, ray : &Ray) -> Option<(f64, UnitVector3)>;
+
+    fn bound(&self, mat : &Matrix4<f64>) -> Option<AABox>; 
 }
   
 impl TraceGeometry for Sphere {
@@ -104,6 +112,12 @@ impl TraceGeometry for Sphere {
             (t_contact, pos.to_vec().normalize())
         )
     }
+
+    fn bound(&self, mat : &Matrix4<f64>) -> Option<AABox> {
+        let origin = mat.transform_point(point3(0.0, 0.0, 0.0));
+        let diff = vec3(self.radius, self.radius, self.radius);
+        Some(AABox { min: origin - diff, max: origin + diff })
+    }
 }
 
 impl TraceGeometry for Plane {
@@ -115,6 +129,10 @@ impl TraceGeometry for Plane {
         Some(
             (t_contact, vec3(0.0,0.0,1.0))
         )
+    }
+
+    fn bound(&self, _ : &Matrix4<f64>) -> Option<AABox> {
+        None
     }
 }
 
@@ -193,6 +211,12 @@ impl TraceGeometry for OriginBox {
         } ;
         return None;
     }
+
+    fn bound(&self, mat : &Matrix4<f64>) -> Option<AABox> {
+        AABox::from_points(self.vertices().into_iter().map(
+            |pt| mat.transform_point(pt)
+        ))
+    }
 }
 
 impl TraceGeometry for Cylinder {
@@ -259,6 +283,21 @@ impl TraceGeometry for Cylinder {
         
 
     }
+
+    fn bound(&self, mat : &Matrix4<f64>) -> Option<AABox> {
+        let top_centre = mat.transform_point(point3(0.0,0.0,self.half_length));
+        let base_centre = mat.transform_point(point3(0.0,0.0,-self.half_length));
+        let diff = vec3(self.radius, self.radius, self.radius);
+        let top_box = AABox {
+            min : top_centre - diff,
+            max : top_centre + diff
+        };
+        let base_box = AABox {
+            min : base_centre - diff,
+            max : base_centre + diff
+        };
+        Some(top_box.merge(&base_box))
+    }
 }
 
 impl Sphere {
@@ -286,6 +325,19 @@ impl OriginBox {
                 }
             )
         )
+    }
+
+    fn vertices(&self) -> [Point3<f64>; 8] {
+        [
+            point3(self.half_dimensions.x, self.half_dimensions.y, self.half_dimensions.z),
+            point3(-self.half_dimensions.x, self.half_dimensions.y, self.half_dimensions.z),
+            point3(self.half_dimensions.x, -self.half_dimensions.y, self.half_dimensions.z),
+            point3(-self.half_dimensions.x, -self.half_dimensions.y, self.half_dimensions.z),
+            point3(self.half_dimensions.x, self.half_dimensions.y, -self.half_dimensions.z),
+            point3(-self.half_dimensions.x, self.half_dimensions.y, -self.half_dimensions.z),
+            point3(self.half_dimensions.x, -self.half_dimensions.y, -self.half_dimensions.z),
+            point3(-self.half_dimensions.x, -self.half_dimensions.y, -self.half_dimensions.z)
+        ]
     }
 
     fn solve(&self, ray : &Ray, axis : Axis) -> Option<(f64,f64)> {
@@ -328,6 +380,68 @@ impl Cylinder {
                 }
             )
         )
+    }
+}
+
+fn min_d(a : f64, b: f64) -> f64 {
+    if a < b {a} else {b}
+}
+
+fn max_d(a : f64, b: f64) -> f64 {
+    if a < b {b} else {a}
+}
+
+impl AABox {
+    pub fn from_points<I>(mut iter : I) -> Option<AABox>
+        where I : Iterator<Item = Point3<f64>>
+    {
+        if let Some(first) = iter.next() {
+            let base = AABox{ min: first, max : first};
+            Some (
+                iter.fold(base, |aabox, point| aabox.merge_pt(point))
+            )
+        } else {
+            None
+        }
+    } 
+
+    fn merge_pt(&self, pt : Point3<f64>) -> AABox {
+        AABox { 
+            min: point3(
+                min_d(self.min.x, pt.x), 
+                min_d(self.min.y, pt.y), 
+                min_d(self.min.z, pt.z)
+            ), 
+            max: point3(
+                max_d(self.max.x, pt.x), 
+                max_d(self.max.y, pt.y), 
+                max_d(self.max.z, pt.z)
+            ), 
+        }
+    }
+
+    pub fn merge(&self, other : &AABox) -> AABox {
+        AABox { 
+            min: point3(
+                min_d(self.min.x, other.min.x), 
+                min_d(self.min.y, other.min.y), 
+                min_d(self.min.z, other.min.z)
+            ), 
+            max: point3(
+                max_d(self.max.x, other.max.x), 
+                max_d(self.max.y, other.max.y), 
+                max_d(self.max.z, other.max.z)
+            ), 
+        }
+    }
+
+    pub fn mid(&self) -> Point3<f64> {
+        Point3::from_vec(self.max.to_vec().lerp(self.min.to_vec(), 0.5))
+    }
+
+    pub fn radius(&self) -> f64 {
+        let diff = self.max - self.min;
+        max_d(diff.x, max_d(diff.y, diff.z)) * 0.5
     }
 }
 
