@@ -2,7 +2,11 @@
     "algorithm" : "raytrace",
     "resolution_x" : 2048,
     "resolution_y" : 2048,
-    "max_depth" : 5,
+    "max_depth" : 5,    
+    "camera" : {
+        "x" : 0, "y" : 0, "z" : 1.0,
+        "dir_x" : 0, "dir_y" : 1 , "dir_z" : 0 
+    },
     "materials" : {
         "red" : {"type" : "colour", "r" : 200, "g" : 50, "b" : 50, "reflect": 0.2},
         "blue" : {"type" : "colour","r" : 50, "g" : 50, "b" : 200, "reflect": 0.2},

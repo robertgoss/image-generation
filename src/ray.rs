@@ -3,8 +3,9 @@
 // Current quadratic and only supports spheres and planes
 
 use std::f64::consts::PI;
+use std::io::{Error, ErrorKind};
 
-use cgmath::{prelude::*};
+use cgmath::{prelude::*, Matrix3};
 use cgmath::{point3, vec3, Point3, Vector3, Matrix4, Deg};
 
 use json::JsonValue;
@@ -36,7 +37,8 @@ struct Contact<'a> {
 
 struct Camera {
     fov : f64,
-    pos  : Point3<f64>
+    pos  : Point3<f64>,
+    mat : Matrix3<f64>
 }
 
 struct Scene<'a> {
@@ -52,11 +54,32 @@ struct Scene<'a> {
 
 impl Camera {
     fn ray(&self, x : f64, y : f64) -> Ray {
-        let diff = vec3(self.fov*(x - 0.5), 1.0, self.fov*(y - 0.5));
+        let base_ray = vec3(self.fov*(x - 0.5), self.fov*(y - 0.5), 1.0);
+        let diff = self.mat * base_ray;
         Ray {
             start : self.pos,
             direction : diff / diff.magnitude()
         }
+    }
+
+    fn from_json(input : &JsonValue) -> Option<Camera> {
+        let x = input["x"].as_f64()?;
+        let y = input["y"].as_f64()?;
+        let z = input["z"].as_f64()?;
+        let fov = input["fov"].as_f64().unwrap_or(1.0);
+        let dir_x = input["dir_x"].as_f64()?;
+        let dir_y = input["dir_y"].as_f64()?;
+        let dir_z = input["dir_z"].as_f64()?;
+        let mat = Matrix3::look_at_lh(
+            point3(0.0,0.0,0.0), 
+            point3(dir_x, dir_y, dir_z), 
+            vec3(0.0, 0.0, 1.0)
+        );
+        Some(Camera {
+            pos : point3(x, y, z),
+            mat : mat,
+            fov : fov
+        })
     }
 }
 
@@ -265,12 +288,15 @@ impl<'a> Scene<'a> {
         let res_y = input["resolution_y"].as_usize().unwrap_or(1024);
         let max_depth = input["max_depth"].as_u8().unwrap_or(4);
         let use_ambiant = input["ambiant_lighting"].as_bool().unwrap_or(false);
+        let camera = Camera::from_json(&input["camera"]).ok_or(
+            Error::new(ErrorKind::InvalidData, "Missing camera")
+        )?;
         let entities : Vec<Entity> = input["entities"].members().filter_map(
             |value| Entity::from_json(value, geometry, materials) 
         ).collect();
         println!("Scene has {} entities", entities.len());
         Ok(Scene {
-            camera : Camera{fov : 1.0,  pos : point3(0.0,0.0,1.0)},
+            camera : camera,
             resolution : (res_x, res_y),
             background : Rgb([200,200,200]),
             background_illumination : 240,
