@@ -7,18 +7,23 @@
 use std::collections::HashMap;
 
 use cgmath::prelude::*;
-use cgmath::{vec3, dot, Point3, Vector3, Matrix4};
+use cgmath::{point2, vec2, vec3, dot, Point2, Point3, Vector2, Vector3, Matrix4};
 use json::JsonValue;
 
 // Helper to remember which we want to always be pre-unitized
 type UnitVector3 = Vector3<f64>;
 
-// An expanded possilby open set of ranges
 // Ray we can trace along
 #[derive(Debug)]
 pub struct Ray {
     pub start : Point3<f64>,
     pub direction : UnitVector3
+}
+
+#[derive(Debug)]
+pub struct Ray2d {
+    pub start : Point2<f64>,
+    pub direction : Vector2<f64>
 }
 
 impl Ray {
@@ -32,6 +37,24 @@ impl Ray {
             direction : transform.transform_vector(self.direction),
         }
     }
+
+    fn xy(&self) -> Ray2d {
+        Ray2d {
+            start : point2(self.start.x, self.start.y),
+            direction : vec2(self.direction.x, self.direction.y)
+        }
+    }
+}
+
+impl Ray2d {
+    fn at(&self, t : f64) -> Point2<f64> {
+        self.start + (self.direction * t)
+    }
+}
+
+struct Cylinder {
+    length : f64,
+    radius : f64
 }
 
 // Axis aligned box at the origin with given half dimensions
@@ -172,6 +195,72 @@ impl TraceGeometry for OriginBox {
     }
 }
 
+impl TraceGeometry for Cylinder {
+    fn trace(&self, ray : &Ray) -> Option<(f64, UnitVector3)> {
+        let ray2d = ray.xy();
+        let radius2 = self.radius * self.radius;
+        if ray.start.z <= 0.0 {
+            // Test hit start
+            if ray.direction.z <= 0.0 {
+                return None
+            }
+            let t_contact_base = -ray.start.z / ray.direction.z;
+            let base_vec = ray2d.at(t_contact_base).to_vec();
+            if base_vec.magnitude2() < radius2 {
+                return Some((t_contact_base, vec3(0.0, 0.0, -1.0))) 
+            }
+        }
+        if ray.start.z >= self.length {
+            // Test hit end
+            if ray.direction.z >= 0.0 {
+                return None
+            }
+            let t_contact_top = -(ray.start.z - self.length) / ray.direction.z;
+            let top_vec = ray2d.at(t_contact_top).to_vec();
+            if top_vec.magnitude2() < radius2 {
+                return Some((t_contact_top, vec3(0.0, 0.0, 1.0))) 
+            }
+        }
+        // Hit middle do 2d check 
+        let dir2dmag2 = ray2d.direction.magnitude2();
+        if dir2dmag2 < 1e-16 {
+            return None;
+        }
+        let dir2dmag = dir2dmag2.sqrt();
+        let dir2d = ray2d.direction / dir2dmag;
+
+        // Do intersection with circle in 2D
+        let diff = -1.0*ray2d.start.to_vec();
+        // Get nearest point on ray to centre
+        let t_nearest = dot(dir2d, diff);
+        // Hit behind
+        if t_nearest < 0.0 {
+            return None;
+        }
+        let projection_nearest = diff - (dir2d * t_nearest);
+        let dist_nearest_sq = projection_nearest.magnitude2();
+        // Ray does not contact circle
+        let radius_sq = self.radius * self.radius;
+        if dist_nearest_sq > radius_sq {
+            return None
+        }
+        // Amount before nearest point on ray that we contact
+        let t_before = (radius_sq - dist_nearest_sq).sqrt();
+        let t_contact = (t_nearest - t_before) / dir2dmag;
+        let pos = ray.at(t_contact).to_vec();
+        let pos2 = vec2(pos.x, pos.y).normalize();
+        // Check the z range
+        if pos.z < 0.0 || pos.z > self.length {
+            return None;
+        }
+        Some(
+            (t_contact, vec3(pos2.x, pos2.y, 0.0))
+        )
+        
+
+    }
+}
+
 impl Sphere {
     fn from_json(input : &JsonValue) -> Option<Box<dyn TraceGeometry>> {
         let r = input["radius"].as_f64()?;
@@ -227,6 +316,21 @@ impl Plane {
     }
 }
 
+impl Cylinder {
+    fn from_json(input : &JsonValue) -> Option<Box<dyn TraceGeometry>> {
+        let r = input["radius"].as_f64()?;
+        let l = input["length"].as_f64()?;
+        Some(
+            Box::new(
+                Cylinder {
+                    radius : r,
+                    length : l
+                }
+            )
+        )
+    }
+}
+
 pub struct Geometries {
     names : HashMap<String, Box<dyn TraceGeometry>>,
 }
@@ -236,6 +340,7 @@ fn geometry_from_json(input : &JsonValue) -> Option<Box<dyn TraceGeometry>> {
         Some("sphere") => Sphere::from_json(input),
         Some("plane") => Plane::from_json(),
         Some("box") => OriginBox::from_json(input),
+        Some("cylinder") => Cylinder::from_json(input),
         _ => None
     }
 }
@@ -369,4 +474,103 @@ mod tests {
         // Miss
         assert!(trace.is_none());
     }
+
+    #[test]
+    fn test_trace_cylinder_under_hit() {
+        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        // Fire directy up ( under)
+        let trace = cylinder.trace(&
+            Ray {start : point3(0.0,0.0,-1.0), direction : vec3(0.0,0.0,1.0)}
+        );
+        // Hit
+        assert!(trace.is_some());
+        assert_abs_diff_eq!(trace.unwrap().0, 1.0);
+        assert_abs_diff_eq!(trace.unwrap().1, vec3(0.0, 0.0, -1.0));
+    }
+
+    #[test]
+    fn test_trace_cylinder_under_miss_dir() {
+        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        // Fire directy up ( under)
+        let trace = cylinder.trace(&
+            Ray {start : point3(0.0,0.0,-1.0), direction : vec3(0.0,0.0,-1.0)}
+        );
+        // Miss
+        assert!(trace.is_none());
+    }
+
+    #[test]
+    fn test_trace_cylinder_under_miss_pos() {
+        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        // Fire directy up ( under)
+        let trace = cylinder.trace(&
+            Ray {start : point3(2.0,0.0,-1.0), direction : vec3(0.0,0.0,1.0)}
+        );
+        // Miss
+        assert!(trace.is_none());
+    }
+
+    #[test]
+    fn test_trace_cylinder_over_hit() {
+        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        // Fire directy up ( under)
+        let trace = cylinder.trace(&
+            Ray {start : point3(0.0,0.0,2.0), direction : vec3(0.0,0.0,-1.0)}
+        );
+        // Hit
+        assert!(trace.is_some());
+        assert_abs_diff_eq!(trace.unwrap().0, 1.0);
+        assert_abs_diff_eq!(trace.unwrap().1, vec3(0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn test_trace_cylinder_over_miss_dir() {
+        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        // Fire directy up ( under)
+        let trace = cylinder.trace(&
+            Ray {start : point3(0.0,0.0,2.0), direction : vec3(0.0,0.0,1.0)}
+        );
+        // Miss
+        assert!(trace.is_none());
+    }
+
+    #[test]
+    fn test_trace_cylinder_over_miss_pos() {
+        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        // Fire directy up ( under)
+        let trace = cylinder.trace(&
+            Ray {start : point3(2.0,0.0,2.0), direction : vec3(0.0,0.0,-1.0)}
+        );
+        // Miss
+        assert!(trace.is_none());
+    }
+
+    #[test]
+    fn test_trace_cylinder_horizontal_hit() {
+        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        // Fire directy up ( under)
+        let trace = cylinder.trace(&
+            Ray {start : point3(2.0,0.0,0.5), direction : vec3(-1.0,0.0,0.0)}
+        );
+        // Hit
+        assert!(trace.is_some());
+        assert_abs_diff_eq!(trace.unwrap().0, 1.5);
+        assert_abs_diff_eq!(trace.unwrap().1, vec3(1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn test_trace_cylinder_slant_hit() {
+        let cylinder = Cylinder { radius: 0.5, length : 1.0 };
+        let l :f64 = 1.0 / 2.0_f64.sqrt();
+        // Fire directy up ( under)
+        let trace = cylinder.trace(&
+            Ray {start : point3(-1.0,0.0,0.75), direction : vec3(l,0.0,-l)}
+        );
+        // Hit
+        assert!(trace.is_some());
+        assert_abs_diff_eq!(trace.unwrap().0, l);
+        assert_abs_diff_eq!(trace.unwrap().1, vec3(-1.0, 0.0, 0.0));
+    }
+
+
 }
