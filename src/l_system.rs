@@ -7,19 +7,23 @@
 //
 // The final result is then drawn a a logo program
 
-use std::{io::{Error, ErrorKind}, collections::HashMap, hash::Hash, cmp::{max_by, min_by, Ordering}, f64::consts::PI};
+use std::{io::{Error, ErrorKind}, collections::HashMap, hash::Hash, cmp::{max_by, min_by, Ordering}, f64::consts::PI, fs::File};
 
-use cgmath::{Point2, vec2, point2};
+use cgmath::{Point2, vec2, point2, Matrix3, point3, Point3, Rad, EuclideanSpace, VectorSpace};
 use json::JsonValue;
 use image::{RgbImage, Rgb};
 
 use imageproc::drawing::{draw_antialiased_line_segment_mut};
 use imageproc::pixelops;
 
+use crate::ray;
+
 // Instructions to control a drawing turtle
 #[derive(Clone)]
 enum TurtleRule {
-    Turn(f64),
+    TurnX(f64),
+    TurnY(f64),
+    TurnZ(f64),
     ForwardDraw(f64),
     Forward(f64)
 }
@@ -36,8 +40,13 @@ impl TurtleRule {
         match input {
             "F" => Some(TurtleRule::ForwardDraw(f_dist)),
             "f" => Some(TurtleRule::Forward(f_dist)),
-            "-" => Some(TurtleRule::Turn(-turn_rad)),
-            "+" => Some(TurtleRule::Turn(turn_rad)),
+            "-" => Some(TurtleRule::TurnZ(-turn_rad)),
+            "+" => Some(TurtleRule::TurnZ(turn_rad)),
+            "^" => Some(TurtleRule::TurnY(-turn_rad)),
+            "&" => Some(TurtleRule::TurnY(turn_rad)),
+            "/" => Some(TurtleRule::TurnX(-turn_rad)),
+            "\\" => Some(TurtleRule::TurnX(turn_rad)),
+            "|" => Some(TurtleRule::TurnZ(PI)),
             _  => None
         }
     }
@@ -49,7 +58,7 @@ fn cmp_d(a : &f64, b : &f64) -> Ordering {
 
 impl LogoProgram {
     fn render(&self, res_x : usize, res_y : usize) -> RgbImage {
-        let lines = self.make_lines();
+        let lines = self.make_lines_2d();
         let max_x = lines.iter().map(
             |line| max_by(line.0.x, line.1.x, cmp_d)
         ).max_by(cmp_d).unwrap();
@@ -85,13 +94,15 @@ impl LogoProgram {
         
     }
 
-    fn make_lines(&self) -> Vec<(Point2<f64>, Point2<f64>)> {
+    fn make_lines_2d(&self) -> Vec<(Point2<f64>, Point2<f64>)> {
         let mut pos = point2(0.0, 0.0);
         let mut angle = 0.0;
         let mut lines = Vec::new();
         for instruction in self.instructions.iter() {
             match instruction {
-                TurtleRule::Turn(a_delta) => angle += a_delta,
+                TurtleRule::TurnX(a_delta) => angle += a_delta,
+                TurtleRule::TurnY(a_delta) => angle += a_delta,
+                TurtleRule::TurnZ(a_delta) => angle += a_delta,
                 TurtleRule::Forward(dist) => {
                     pos += vec2(dist * angle.cos(), dist * angle.sin());
                 },
@@ -101,6 +112,117 @@ impl LogoProgram {
                     lines.push((start, pos));
                 },
             }
+        }
+        lines
+    }
+
+    fn lengths(&self) -> f64 {
+        self.instructions.iter().filter_map(
+            |ins| match ins {
+                TurtleRule::ForwardDraw(l) => Some(*l),
+                _ => None
+            }
+        ).next().unwrap()
+    }
+
+    fn render_3d(&self, res_x : usize, res_y : usize) -> Result<RgbImage, json::JsonError> {
+        let lines = self.make_lines_3d();
+        let lengths = self.lengths();
+        // Make json document to render
+        let mut new_scene = JsonValue::new_object();
+        new_scene.insert("resolution_x", res_x)?;
+        new_scene.insert("resolution_y", res_y)?;
+        new_scene.insert("depth", 4)?;
+        new_scene.insert("algorithm", "raytrace")?;
+        // Add a camera
+        let mut camera = JsonValue::new_object();
+        camera.insert("x", 0.0)?;
+        camera.insert("y", 0.0)?;
+        camera.insert("z", 0.0)?;
+        camera.insert("dir_x", 1.0)?;
+        camera.insert("dir_y", 0.5)?;
+        camera.insert("dir_z", -1.0)?;
+        camera.insert("automatic", true)?;
+        new_scene.insert("camera", camera)?;
+        // Add the two bits of geometry
+        let mut geom = JsonValue::new_object();
+        let mut line = JsonValue::new_object();
+        line.insert("radius", 0.01)?;
+        line.insert("length", lengths)?;
+        line.insert("type", "cylinder")?;
+        geom.insert("line", line)?;
+        let mut ball = JsonValue::new_object();
+        ball.insert("radius", 0.01)?;
+        ball.insert("type", "sphere")?;
+        geom.insert("ball", ball)?;
+        new_scene.insert("geometries", geom)?;
+        // Add a red material
+        let mut materials = JsonValue::new_object();
+        let mut red = JsonValue::new_object();
+        red.insert("type", "colour")?;
+        red.insert("r", 200)?;
+        red.insert("g", 50)?;
+        red.insert("b", 50)?;
+        red.insert("reflect", 0.3)?;
+        materials.insert("red", red)?;
+        new_scene.insert("materials", materials)?;
+        // Add entities for each line
+        let mut entities = JsonValue::new_array();
+        let mut sball_entity = JsonValue::new_object();
+        let pt = lines.first().unwrap().0;
+        sball_entity.insert("geom", "ball")?;
+        sball_entity.insert("x", pt.x)?;
+        sball_entity.insert("y", pt.y)?;
+        sball_entity.insert("z", pt.z)?;
+        sball_entity.insert("mat", "red")?;
+        entities.push(sball_entity)?;
+        for (start, end) in lines {
+            let mid = start.to_vec().lerp(end.to_vec(), 0.5);
+            let diff = end - start;
+            let mut line_entity = JsonValue::new_object();
+            line_entity.insert("geom", "line")?;
+            line_entity.insert("x", mid.x)?;
+            line_entity.insert("y", mid.y)?;
+            line_entity.insert("z", mid.z)?;
+            line_entity.insert("dir_x", diff.x)?;
+            line_entity.insert("dir_y", diff.y)?;
+            line_entity.insert("dir_z", diff.z)?;
+            line_entity.insert("mat", "red")?;
+            let mut ball_entity = JsonValue::new_object();
+            ball_entity.insert("geom", "ball")?;
+            ball_entity.insert("x", end.x)?;
+            ball_entity.insert("y", end.y)?;
+            ball_entity.insert("z", end.z)?;
+            ball_entity.insert("mat", "red")?;
+            entities.push(line_entity)?;
+            entities.push(ball_entity)?;
+        }
+        new_scene.insert("entities", entities)?;
+        let mut file = File::create("test.json").unwrap();
+        new_scene.write_pretty(&mut file, 4).unwrap();
+        ray::generate(&new_scene).map_err(
+            |_| json::JsonError::UnexpectedEndOfJson
+        )
+    }
+
+    fn make_lines_3d(&self) -> Vec<(Point3<f64>, Point3<f64>)> {
+        let mut coords : Matrix3<f64> = Matrix3::from_scale(1.0);
+        let mut pos = point3(0.0, 0.0, 0.0);
+        let mut lines = Vec::new();
+        for instruction in self.instructions.iter() {
+            match instruction {
+                TurtleRule::TurnX(x_delta) => coords = coords * Matrix3::from_angle_x(Rad(*x_delta)),
+                TurtleRule::TurnY(y_delta) => coords = coords * Matrix3::from_angle_y(Rad(*y_delta)),
+                TurtleRule::TurnZ(z_delta) => coords = coords * Matrix3::from_angle_z(Rad(*z_delta)),
+                TurtleRule::Forward(dist) => {
+                    pos += coords.x * (*dist);
+                },
+                TurtleRule::ForwardDraw(dist) => {
+                    let start = pos;
+                    pos += coords.x * (*dist);
+                    lines.push((start, pos));
+                }
+            };
         }
         lines
     }
@@ -184,6 +306,7 @@ impl LSystem<String> {
 struct LSystemSimulation {
     system : LSystem<String>,
     resolution : (usize, usize),
+    dim3d : bool,
     depth : usize,
     axiom : Vec<String>
 }
@@ -196,6 +319,7 @@ impl LSystemSimulation {
         let res_x = input["resolution_x"].as_usize().unwrap_or(1024);
         let res_y = input["resolution_y"].as_usize().unwrap_or(1024);
         let depth = input["depth"].as_usize().unwrap_or(6);
+        let render_dim = input["render_3d"].as_bool().unwrap_or(false);
         let axiom = parse_symbol_rule(&input["axiom"]).ok_or(
             Error::new(ErrorKind::InvalidData, "Invalid Axiom")
         )?;
@@ -204,6 +328,7 @@ impl LSystemSimulation {
                 system: system, 
                 resolution: (res_x, res_y), 
                 depth: depth,
+                dim3d : render_dim,
                 axiom: axiom
             }
         )
@@ -214,7 +339,11 @@ impl LSystemSimulation {
         let symbols = self.system.simulate(self.axiom.clone(), self.depth);
         println!("Derivation has {} symbols", symbols.len());
         let logo = self.system.draw(&symbols);
-        logo.render(self.resolution.0, self.resolution.1)
+        if self.dim3d {
+            logo.render_3d(self.resolution.0, self.resolution.1).unwrap()
+        } else {
+            logo.render(self.resolution.0, self.resolution.1)
+        }
     }
 }
 
