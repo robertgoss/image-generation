@@ -214,8 +214,6 @@ impl LogoProgram {
             entities.push(ball_entity)?;
         }
         new_scene.insert("entities", entities)?;
-        let mut file = File::create("test.json").unwrap();
-        new_scene.write_pretty(&mut file, 4).unwrap();
         ray::generate(&new_scene).map_err(
             |_| json::JsonError::UnexpectedEndOfJson
         )
