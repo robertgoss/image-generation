@@ -6,7 +6,7 @@ use std::f64::consts::PI;
 use std::io::{Error, ErrorKind};
 
 use cgmath::{prelude::*, Matrix3};
-use cgmath::{point3, vec3, Point3, Vector3, Matrix4, Deg};
+use cgmath::{point3, vec3, vec4, Point3, Vector3, Matrix4};
 
 use json::JsonValue;
 use image::{Rgb, RgbImage};
@@ -24,8 +24,8 @@ type UnitVector3 = Vector3<f64>;
 
 struct Entity<'a> {
     geometry : &'a dyn TraceGeometry,
-    coords : Matrix4<f64>,
-    inv_coords : Matrix4<f64>,
+    to_local : Matrix4<f64>,
+    to_world : Matrix4<f64>,
     material : &'a dyn Material
 }
 
@@ -71,17 +71,18 @@ impl Camera {
         let dir_y = input["dir_y"].as_f64()?;
         let dir_z = input["dir_z"].as_f64()?;
         let dir_vec : Vector3<f64> = vec3(dir_x, dir_y, dir_z).normalize();
-        let z_vec = vec3(0.0, 0.0, 1.0);
-        let mat = if dir_vec.dot(-z_vec).abs() > 1.0-1e-10 {
-            let x_vec = vec3(1.0, 0.0, 0.0);
-            let y_vec = vec3(0.0, 1.0, 0.0);
-            Matrix3 { x: x_vec, y: y_vec, z: -z_vec }
+        // Want camera with z pointing down dir, y points (as close as possible to z)
+        // and x whatever is left.
+        let mat = if dir_vec.z.abs() > 1.0 - 1.0e-8 {
+            // we are pointing directly up align other with y
+            let x = dir_vec.cross(vec3(0.0, 1.0, 0.0));
+            let y = x.cross(dir_vec);
+            Matrix3{ x : x, y : y, z : dir_vec}
         } else {
-            Matrix3::look_at_lh(
-                point3(0.0,0.0,0.0), 
-                point3(dir_x, dir_y, dir_z), 
-                vec3(0.0, 0.0, 1.0)
-            )
+            // we are pointing directly up align other with y
+            let x = dir_vec.cross(vec3(0.0, 0.0, 1.0));
+            let y = x.cross(dir_vec);
+            Matrix3{ x : x, y : y, z : dir_vec}
         };
         let automatic = input["automatic"].as_bool().unwrap_or(false);
         // Set the generic 
@@ -110,19 +111,32 @@ impl<'a> Entity<'a> {
         let x = input["x"].as_f64()?;
         let y = input["y"].as_f64()?;
         let z = input["z"].as_f64()?;
-        let mut transform = Matrix4::from_translation(vec3(x,y,z));
-        if let Some(roll) = input["roll"].as_f64() {
-            let roll_matrix = Matrix4::from_angle_z(Deg::<f64>(roll));
-            transform = transform * roll_matrix;
-        }
-        let inv = transform.invert().unwrap();
-        Some(Entity { geometry: geometry, coords: transform, inv_coords: inv, material: material }) 
+        let dir_x = input["dir_x"].as_f64().unwrap_or(0.0);
+        let dir_y = input["dir_y"].as_f64().unwrap_or(0.0);
+        let dir_z = input["dir_z"].as_f64().unwrap_or(1.0);
+        let dir = vec3(dir_x, dir_y, dir_z).normalize();
+        // Want camera with z pointing down dir, y points (as close as possible to z)
+        // and x whatever is left.
+        let xv = if dir.z.abs() > 1.0 - 1.0e-8 {
+            dir.cross(vec3(0.0, -1.0, 0.0))
+        } else {
+            dir.cross(vec3(0.0, 0.0, -1.0))
+        };
+        let yv = -xv.cross(dir);
+        let to_world = Matrix4{ 
+            x : vec4(xv.x, xv.y, xv.z, 0.0),
+            y : vec4(yv.x, yv.y, yv.z, 0.0),
+            z : vec4(dir.x, dir.y, dir.z, 0.0),
+            w : vec4(x, y, z, 1.0)
+        };
+        let inv = to_world.invert().unwrap();
+        Some(Entity { geometry: geometry, to_local: inv, to_world: to_world, material: material }) 
     }
 
     fn trace(&self, ray : &Ray) -> Option<Contact<'a>> {
-        let transformed_ray = ray.transform(&self.inv_coords);
+        let transformed_ray = ray.transform(&self.to_local);
         let (t_contact, transformed_norm) = self.geometry.trace(&transformed_ray)?;
-        let normal = self.coords.transform_vector(transformed_norm);
+        let normal = self.to_world.transform_vector(transformed_norm);
         Some(Contact { 
             pos : ray.at(t_contact),
             local_pos: transformed_ray.at(t_contact), 
@@ -328,7 +342,7 @@ impl<'a> Scene<'a> {
             max : self.camera.pos
         };
         self.entities.iter().filter_map(
-            |entity| entity.geometry.bound(&entity.coords)
+            |entity| entity.geometry.bound(&entity.to_world)
         ).fold(inital, |aabox : AABox, other| aabox.merge(&other))
     }
 
@@ -357,7 +371,7 @@ impl<'a> Scene<'a> {
         }
         let bound = self.bound_scene();
         let centre = bound.mid();
-        let radius = bound.radius();
+        let radius = bound.radius() * 3.0;
         let pos = centre - self.camera.mat.z * radius;
         self.camera.pos = pos;
     }
