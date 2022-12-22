@@ -7,23 +7,18 @@
 use std::collections::HashMap;
 
 use cgmath::{prelude::*, point3};
-use cgmath::{point2, vec2, vec3, dot, Point2, Point3, Vector2, Vector3, Matrix4, EuclideanSpace};
+use cgmath::{point2, vec2, vec3, dot, Point3, Vector3, Matrix4, EuclideanSpace};
 use json::JsonValue;
+
+use crate::ray::geometry2::{Ray2, Circle, OriginSquare, TraceGeometry2};
 
 // Helper to remember which we want to always be pre-unitized
 type UnitVector3 = Vector3<f64>;
 
 // Ray we can trace along
-#[derive(Debug)]
 pub struct Ray {
     pub start : Point3<f64>,
     pub direction : UnitVector3
-}
-
-#[derive(Debug)]
-pub struct Ray2d {
-    pub start : Point2<f64>,
-    pub direction : Vector2<f64>
 }
 
 impl Ray {
@@ -38,28 +33,26 @@ impl Ray {
         }
     }
 
-    fn xy(&self) -> Ray2d {
-        Ray2d {
+    fn xy(&self) -> Ray2 {
+        Ray2 {
             start : point2(self.start.x, self.start.y),
             direction : vec2(self.direction.x, self.direction.y)
         }
     }
 }
 
-impl Ray2d {
-    fn at(&self, t : f64) -> Point2<f64> {
-        self.start + (self.direction * t)
-    }
+struct Prism<Base> {
+    base : Base,
+    half_length : f64
 }
 
 struct Cylinder {
-    half_length : f64,
-    radius : f64
+    prism : Prism<Circle>
 }
 
 // Axis aligned box at the origin with given half dimensions
 struct OriginBox {
-    half_dimensions : Vector3<f64>
+    prism : Prism<OriginSquare>
 }
 
 // A axis aligned box to bound geomenty
@@ -136,80 +129,9 @@ impl TraceGeometry for Plane {
     }
 }
 
-fn sign(x: f64) -> f64 {
-    if x > 0.0 { 
-        1.0
-    } else {
-        -1.0
-    }
-}
-
-enum Axis {
-    X,
-    Y,
-    Z
-}
-
 impl TraceGeometry for OriginBox {
     fn trace(&self, ray : &Ray) -> Option<(f64, UnitVector3)> {
-        let mut range = None;
-        let mut axis = None;
-        if let Some(t_contact_x) = self.solve(ray, Axis::X) {
-            axis = Some(Axis::X);
-            range = Some(t_contact_x)
-        } else {
-            if ray.start.x.abs() > self.half_dimensions.x {
-                return None;
-            } 
-        }
-        if let Some((min_y, max_y)) = self.solve(ray, Axis::Y) {
-            if let Some((min_r, max_r)) = range.as_mut() {
-                if *min_r < min_y { 
-                    *min_r = min_y;
-                    axis = Some(Axis::Y);
-                }
-                if *max_r > max_y {
-                    *max_r = max_y;
-                }
-            } else {
-                axis = Some(Axis::Y);
-                range = Some((min_y, max_y))
-            }
-        } else {
-            if ray.start.y.abs() > self.half_dimensions.y {
-                return None;
-            } 
-        }
-        if let Some((min_z, max_z)) = self.solve(ray, Axis::Z) {
-            if let Some((min_r, max_r)) = range.as_mut() {
-                if *min_r < min_z { 
-                    *min_r = min_z;
-                    axis = Some(Axis::Z);
-                }
-                if *max_r > max_z {
-                    *max_r = max_z;
-                }
-            } else {
-                axis = Some(Axis::Z);
-                range = Some((min_z, max_z))
-            }
-        } else {
-            if ray.start.z.abs() > self.half_dimensions.z {
-                return None;
-            } 
-        }
-        if let Some((min_r, max_r)) = range {
-            if min_r < 0.0 || min_r > max_r {
-                return None;
-            }
-            return match axis {
-                Some(Axis::X) => Some((min_r, vec3(-sign(ray.direction.x), 0.0, 0.0))),
-                Some(Axis::Y) => Some((min_r, vec3(0.0, -sign(ray.direction.y), 0.0))),
-                Some(Axis::Z) => Some((min_r, vec3(0.0, 0.0, -sign(ray.direction.z)))),
-                None => None
-            }
-        } ;
-        return None;
+        self.prism.trace(ray)
     }
 
     fn bound(&self, mat : &Matrix4<f64>) -> Option<AABox> {
@@ -221,73 +143,15 @@ impl TraceGeometry for OriginBox {
 
 impl TraceGeometry for Cylinder {
     fn trace(&self, ray : &Ray) -> Option<(f64, UnitVector3)> {
-        let ray2d = ray.xy();
-        let radius2 = self.radius * self.radius;
-        if ray.start.z <= -self.half_length {
-            // Test hit start
-            if ray.direction.z <= 0.0 {
-                return None
-            }
-            let t_contact_base = -(ray.start.z + self.half_length) / ray.direction.z;
-            let base_vec = ray2d.at(t_contact_base).to_vec();
-            if base_vec.magnitude2() < radius2 {
-                return Some((t_contact_base, vec3(0.0, 0.0, -1.0))) 
-            }
-        }
-        if ray.start.z >= self.half_length {
-            // Test hit end
-            if ray.direction.z >= 0.0 {
-                return None
-            }
-            let t_contact_top = -(ray.start.z - self.half_length) / ray.direction.z;
-            let top_vec = ray2d.at(t_contact_top).to_vec();
-            if top_vec.magnitude2() < radius2 {
-                return Some((t_contact_top, vec3(0.0, 0.0, 1.0))) 
-            }
-        }
-        // Hit middle do 2d check 
-        let dir2dmag2 = ray2d.direction.magnitude2();
-        if dir2dmag2 < 1e-16 {
-            return None;
-        }
-        let dir2dmag = dir2dmag2.sqrt();
-        let dir2d = ray2d.direction / dir2dmag;
-
-        // Do intersection with circle in 2D
-        let diff = -1.0*ray2d.start.to_vec();
-        // Get nearest point on ray to centre
-        let t_nearest = dot(dir2d, diff);
-        // Hit behind
-        if t_nearest < 0.0 {
-            return None;
-        }
-        let projection_nearest = diff - (dir2d * t_nearest);
-        let dist_nearest_sq = projection_nearest.magnitude2();
-        // Ray does not contact circle
-        let radius_sq = self.radius * self.radius;
-        if dist_nearest_sq > radius_sq {
-            return None
-        }
-        // Amount before nearest point on ray that we contact
-        let t_before = (radius_sq - dist_nearest_sq).sqrt();
-        let t_contact = (t_nearest - t_before) / dir2dmag;
-        let pos = ray.at(t_contact).to_vec();
-        let pos2 = vec2(pos.x, pos.y).normalize();
-        // Check the z range
-        if pos.z.abs() > self.half_length {
-            return None;
-        }
-        Some(
-            (t_contact, vec3(pos2.x, pos2.y, 0.0))
-        )
-        
-
+        self.prism.trace(ray)
     }
 
     fn bound(&self, mat : &Matrix4<f64>) -> Option<AABox> {
-        let top_centre = mat.transform_point(point3(0.0,0.0,self.half_length));
-        let base_centre = mat.transform_point(point3(0.0,0.0,-self.half_length));
-        let diff = vec3(self.radius, self.radius, self.radius);
+        let half_length = self.prism.half_length;
+        let radius = self.prism.base.radius;
+        let top_centre = mat.transform_point(point3(0.0,0.0,half_length));
+        let base_centre = mat.transform_point(point3(0.0,0.0,-half_length));
+        let diff = vec3(radius, radius, radius);
         let top_box = AABox {
             min : top_centre - diff,
             max : top_centre + diff
@@ -297,6 +161,48 @@ impl TraceGeometry for Cylinder {
             max : base_centre + diff
         };
         Some(top_box.merge(&base_box))
+    }
+}
+
+impl<Base> Prism<Base> 
+  where Base : TraceGeometry2 {
+    fn trace(&self, ray : &Ray) -> Option<(f64, UnitVector3)> {
+        if ray.start.z > self.half_length {
+            if ray.direction.z > 0.0 {
+                return None;
+            }
+            // Get intersection with top plane 
+            let t_contact_top = (self.half_length - ray.start.z) / ray.direction.z;
+            let pos_top = ray.at(t_contact_top);
+            if self.base.inside(&point2(pos_top.x, pos_top.y)) {
+                return Some((t_contact_top, vec3(0.0, 0.0, 1.0)));
+            }
+        } 
+        if ray.start.z < -self.half_length {
+            if ray.direction.z < 0.0 {
+                return None;
+            }
+            // Get intersection with top plane 
+            let t_contact_bot = (-self.half_length - ray.start.z) / ray.direction.z;
+            let pos_bot = ray.at(t_contact_bot);
+            if self.base.inside(&point2(pos_bot.x, pos_bot.y)) {
+                return Some((t_contact_bot, vec3(0.0, 0.0, -1.0)));
+            }
+        } 
+        // If we can do a 2D check aginst the side
+        let mut ray2 = ray.xy();
+        let ray_length_sq = ray2.direction.magnitude2();
+        if ray_length_sq < 1e-9 {
+            return None;
+        }
+        // Fiddle the length
+        let ray_length = ray_length_sq.sqrt();
+        ray2.direction = ray2.direction / ray_length;
+        if let Some((t_contact_2d, norm)) = self.base.trace(&ray2) {
+            Some((t_contact_2d / ray_length, vec3(norm.x, norm.y, 0.0)))
+        } else {
+            None
+        }
     }
 }
 
@@ -320,41 +226,37 @@ impl OriginBox {
         let z = input["z"].as_f64()?;
         Some(
             Box::new(
-                OriginBox {
-                    half_dimensions : vec3(x/2.0, y/2.0, z/2.0)
-                }
+                OriginBox::new(&vec3(x,y,z))
             )
         )
     }
 
-    fn vertices(&self) -> [Point3<f64>; 8] {
-        [
-            point3(self.half_dimensions.x, self.half_dimensions.y, self.half_dimensions.z),
-            point3(-self.half_dimensions.x, self.half_dimensions.y, self.half_dimensions.z),
-            point3(self.half_dimensions.x, -self.half_dimensions.y, self.half_dimensions.z),
-            point3(-self.half_dimensions.x, -self.half_dimensions.y, self.half_dimensions.z),
-            point3(self.half_dimensions.x, self.half_dimensions.y, -self.half_dimensions.z),
-            point3(-self.half_dimensions.x, self.half_dimensions.y, -self.half_dimensions.z),
-            point3(self.half_dimensions.x, -self.half_dimensions.y, -self.half_dimensions.z),
-            point3(-self.half_dimensions.x, -self.half_dimensions.y, -self.half_dimensions.z)
-        ]
+    fn new(half_lengths : &Vector3<f64>) -> OriginBox {
+        OriginBox {
+            prism : Prism {
+                half_length : half_lengths.z,
+                base : OriginSquare {
+                    x_half : half_lengths.x,
+                    y_half : half_lengths.y
+                }
+            }
+        }
     }
 
-    fn solve(&self, ray : &Ray, axis : Axis) -> Option<(f64,f64)> {
-        let (dir, dim, start) = match axis {
-            Axis::X => (ray.direction.x, self.half_dimensions.x, ray.start.x),
-            Axis::Y => (ray.direction.y, self.half_dimensions.y, ray.start.y),
-            Axis::Z => (ray.direction.z, self.half_dimensions.z, ray.start.z)
-        };
-        if dir != 0.0 {
-            let sign_dim = sign(dir) * dim;
-            let diff = (-sign_dim) - start;
-            let t_contact = diff/dir;
-            let extra = 2.0 * sign_dim / dir;
-            Some((t_contact, t_contact + extra))
-        } else {
-            None
-        }
+    fn vertices(&self) -> [Point3<f64>; 8] {
+        let x = self.prism.base.x_half;
+        let y = self.prism.base.y_half;
+        let z = self.prism.half_length;
+        [
+            point3(x,y,z),
+            point3(x,y,-z),
+            point3(x,-y,z),
+            point3(x,-y,-z),
+            point3(-x,y,z),
+            point3(-x,y,-z),
+            point3(-x,-y,z),
+            point3(-x,-y,-z)
+        ]
     }
 }
 
@@ -374,12 +276,18 @@ impl Cylinder {
         let l = input["length"].as_f64()?;
         Some(
             Box::new(
-                Cylinder {
-                    radius : r,
-                    half_length : l / 2.0
-                }
+                Cylinder::new(r, l / 2.0)
             )
         )
+    }
+
+    fn new(radius : f64, half_length : f64) -> Cylinder {
+        Cylinder {
+            prism : Prism { 
+                base: Circle { radius: radius }, 
+                half_length: half_length
+            }
+        }
     }
 }
 
@@ -544,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_trace_box_axis_hit() {
-        let cube = OriginBox { half_dimensions : vec3(1.0, 1.0, 1.0)};
+        let cube = OriginBox::new(&vec3(1.0, 1.0, 1.0));
         // Fire along axis and hit
         let trace = cube.trace(&
             Ray {start : point3(-10.0,0.0,0.0), direction : vec3(1.0,0.0,0.0)}
@@ -557,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_trace_box_slanted_down_hit() {
-        let cube = OriginBox { half_dimensions : vec3(1.0, 1.0, 1.0)};
+        let cube = OriginBox::new(&vec3(1.0, 1.0, 1.0));
         // Fire along axis and hit
         let dir = vec3(1.0, 0.0, -1e-3).normalize();
         let trace = cube.trace(&
@@ -570,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_trace_box_axis_miss() {
-        let cube = OriginBox { half_dimensions : vec3(1.0, 1.0, 1.0)};
+        let cube = OriginBox::new(&vec3(1.0, 1.0, 1.0));
         // Fire along axis and hit
         let trace = cube.trace(&
             Ray {start : point3(-10.0,4.0,0.0), direction : vec3(1.0,0.0,0.0)}
@@ -580,7 +488,7 @@ mod tests {
     }
     #[test]
     fn test_trace_box_axis_inside() {
-        let cube = OriginBox { half_dimensions : vec3(1.0, 1.0, 1.0)};
+        let cube = OriginBox::new(&vec3(1.0, 1.0, 1.0));
         // Fire along axis and hit
         let trace = cube.trace(&
             Ray {start : point3(0.0,0.0,0.0), direction : vec3(1.0,0.0,0.0)}
@@ -591,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_under_hit() {
-        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
+        let cylinder = Cylinder::new(0.5, 0.5);
         // Fire directy up ( under)
         let trace = cylinder.trace(&
             Ray {start : point3(0.0,0.0,-1.5), direction : vec3(0.0,0.0,1.0)}
@@ -604,7 +512,7 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_under_miss_dir() {
-        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
+        let cylinder = Cylinder::new(0.5, 0.5);
         // Fire directy up ( under)
         let trace = cylinder.trace(&
             Ray {start : point3(0.0,0.0,-1.0), direction : vec3(0.0,0.0,-1.0)}
@@ -615,7 +523,7 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_under_miss_pos() {
-        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
+        let cylinder = Cylinder::new(0.5, 0.5);
         // Fire directy up ( under)
         let trace = cylinder.trace(&
             Ray {start : point3(2.0,0.0,-1.0), direction : vec3(0.0,0.0,1.0)}
@@ -626,7 +534,7 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_over_hit() {
-        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
+        let cylinder = Cylinder::new(0.5, 0.5);
         // Fire directy up ( under)
         let trace = cylinder.trace(&
             Ray {start : point3(0.0,0.0,1.5), direction : vec3(0.0,0.0,-1.0)}
@@ -639,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_over_miss_dir() {
-        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
+        let cylinder = Cylinder::new(0.5, 0.5);
         // Fire directy up ( under)
         let trace = cylinder.trace(&
             Ray {start : point3(0.0,0.0,2.0), direction : vec3(0.0,0.0,1.0)}
@@ -650,7 +558,7 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_over_miss_pos() {
-        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
+        let cylinder = Cylinder::new(0.5, 0.5);
         // Fire directy up ( under)
         let trace = cylinder.trace(&
             Ray {start : point3(2.0,0.0,2.0), direction : vec3(0.0,0.0,-1.0)}
@@ -661,7 +569,7 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_horizontal_hit() {
-        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
+        let cylinder = Cylinder::new(0.5, 0.5);
         // Fire directy up ( under)
         let trace = cylinder.trace(&
             Ray {start : point3(2.0,0.0,0.0), direction : vec3(-1.0,0.0,0.0)}
@@ -674,7 +582,7 @@ mod tests {
 
     #[test]
     fn test_trace_cylinder_slant_hit() {
-        let cylinder = Cylinder { radius: 0.5, half_length : 0.5 };
+        let cylinder = Cylinder::new(0.5, 0.5);
         let l :f64 = 1.0 / 2.0_f64.sqrt();
         // Fire directy up ( under)
         let trace = cylinder.trace(&

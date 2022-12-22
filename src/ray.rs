@@ -12,6 +12,7 @@ use json::JsonValue;
 use image::{Rgb, RgbImage};
 
 mod geometry;
+mod geometry2;
 mod materials;
 
 use geometry::{TraceGeometry, Ray, Geometries};
@@ -371,7 +372,7 @@ impl<'a> Scene<'a> {
         }
         let bound = self.bound_scene();
         let centre = bound.mid();
-        let radius = bound.radius() * 3.0;
+        let radius = bound.radius() * 5.0;
         let pos = centre - self.camera.mat.z * radius;
         self.camera.pos = pos;
     }
