@@ -1,0 +1,27 @@
+{
+    "algorithm" : "l_system",
+    "resolution_x" : 2048,
+    "resolution_y" : 2048,
+    "depth" : 7,
+    "axiom" : "X",
+    "forward" : 1,
+    "turn" : 25.7,
+    "render_3d": false,
+    "rules" : {
+        "X" : "F,[,+,X,],[,-,X,],F,X",
+        "F" : "F,F"
+    },
+    "draw_instructions" : {
+        "F" : "F",
+        "f" : "f",
+        "+" : "+",
+        "-" : "-",
+        "^" : "^",
+        "&" : "&",
+        "/" : "/",
+        "\\" : "\\",
+        "[" : "[",
+        "]" : "]",
+        "|" : "|"
+    }
+}

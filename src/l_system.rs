@@ -24,6 +24,8 @@ enum TurtleRule {
     TurnX(f64),
     TurnY(f64),
     TurnZ(f64),
+    PushStack,
+    PopStack,
     ForwardDraw(f64),
     Forward(f64)
 }
@@ -47,6 +49,8 @@ impl TurtleRule {
             "/" => Some(TurtleRule::TurnX(-turn_rad)),
             "\\" => Some(TurtleRule::TurnX(turn_rad)),
             "|" => Some(TurtleRule::TurnZ(PI)),
+            "[" => Some(TurtleRule::PushStack),
+            "]" => Some(TurtleRule::PopStack),
             _  => None
         }
     }
@@ -73,9 +77,11 @@ impl LogoProgram {
         ).min_by(cmp_d).unwrap();
         let centre = point2((max_x+min_x) / 2.0, (max_y+min_y) / 2.0);
         let size = vec2((max_x-min_x) *1.06, (max_y-min_y) *1.06);
-        let scale_x = res_x as f64 / size.x;
-        let scale_y = res_y as f64 / size.y;
-        let base = centre - (size * 0.5);
+        let m_size = max_by(size.x, size.y, cmp_d);
+        let scale_x = res_x as f64 / m_size;
+        let scale_y = res_y as f64 / m_size;
+        let pic_size = vec2(m_size, m_size);
+        let base = centre - (pic_size * 0.5);
         let mut image = RgbImage::new(res_x as u32, res_y as u32);
         for (start, end) in lines {
             let rel_start_pos = start - base;
@@ -96,8 +102,9 @@ impl LogoProgram {
 
     fn make_lines_2d(&self) -> Vec<(Point2<f64>, Point2<f64>)> {
         let mut pos = point2(0.0, 0.0);
-        let mut angle = 0.0;
+        let mut angle = -PI / 2.0;
         let mut lines = Vec::new();
+        let mut stack = Vec::new();
         for instruction in self.instructions.iter() {
             match instruction {
                 TurtleRule::TurnX(a_delta) => angle += a_delta,
@@ -111,6 +118,15 @@ impl LogoProgram {
                     pos += vec2(dist * angle.cos(), dist * angle.sin());
                     lines.push((start, pos));
                 },
+                TurtleRule::PopStack => {
+                    if let Some((p, a)) = stack.pop() {
+                        pos = p;
+                        angle = a;
+                    }
+                }
+                TurtleRule::PushStack => {
+                    stack.push((pos, angle));
+                }
             }
         }
         lines
@@ -208,6 +224,7 @@ impl LogoProgram {
     fn make_lines_3d(&self) -> Vec<(Point3<f64>, Point3<f64>)> {
         let mut coords : Matrix3<f64> = Matrix3::from_scale(1.0);
         let mut pos = point3(0.0, 0.0, 0.0);
+        let mut stack : Vec<(Point3<f64>, Matrix3<f64>)> = Vec::new();
         let mut lines = Vec::new();
         for instruction in self.instructions.iter() {
             match instruction {
@@ -221,6 +238,15 @@ impl LogoProgram {
                     let start = pos;
                     pos += coords.x * (*dist);
                     lines.push((start, pos));
+                }
+                TurtleRule::PopStack => {
+                    if let Some((p, c)) = stack.pop() {
+                        pos = p;
+                        coords = c;
+                    }
+                }
+                TurtleRule::PushStack => {
+                    stack.push((pos, coords));
                 }
             };
         }
