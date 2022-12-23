@@ -7,10 +7,10 @@
 //
 // The final result is then drawn a a logo program
 
-use std::{io::{Error, ErrorKind}, collections::HashMap, hash::Hash, cmp::{max_by, min_by, Ordering}, f64::consts::PI, fs::File};
+use std::{io::{Error, ErrorKind}, collections::HashMap, hash::Hash, cmp::{max_by, min_by, Ordering}, f64::consts::PI, fs};
 
 use cgmath::{Point2, vec2, point2, Matrix3, point3, Point3, Rad, EuclideanSpace, VectorSpace};
-use json::JsonValue;
+use json::{JsonValue, object};
 use image::{RgbImage, Rgb};
 
 use imageproc::drawing::{draw_antialiased_line_segment_mut};
@@ -26,6 +26,7 @@ enum TurtleRule {
     TurnZ(f64),
     PushStack,
     PopStack,
+    ReduceDiameter,
     ForwardDraw(f64),
     Forward(f64)
 }
@@ -51,6 +52,7 @@ impl TurtleRule {
             "|" => Some(TurtleRule::TurnZ(PI)),
             "[" => Some(TurtleRule::PushStack),
             "]" => Some(TurtleRule::PopStack),
+            "!" => Some(TurtleRule::ReduceDiameter),
             _  => None
         }
     }
@@ -126,7 +128,8 @@ impl LogoProgram {
                 }
                 TurtleRule::PushStack => {
                     stack.push((pos, angle));
-                }
+                },
+                TurtleRule::ReduceDiameter => {}
             }
         }
         lines
@@ -144,85 +147,103 @@ impl LogoProgram {
     fn render_3d(&self, res_x : usize, res_y : usize) -> Result<RgbImage, json::JsonError> {
         let lines = self.make_lines_3d();
         let lengths = self.lengths();
+        let min_dia = lines.iter().map(
+            |(_,_,d)| *d
+        ).max().unwrap();
         // Make json document to render
-        let mut new_scene = JsonValue::new_object();
-        new_scene.insert("resolution_x", res_x)?;
-        new_scene.insert("resolution_y", res_y)?;
-        new_scene.insert("depth", 4)?;
-        new_scene.insert("algorithm", "raytrace")?;
+        let mut new_scene = object! {
+            "resolution_x": res_x,
+            "resolution_y": res_y,
+            "depth": 4,
+            "algorithm": "raytrace"
+        };
         // Add a camera
-        let mut camera = JsonValue::new_object();
-        camera.insert("x", 0.0)?;
-        camera.insert("y", 0.0)?;
-        camera.insert("z", 0.0)?;
-        camera.insert("dir_x", 1.0)?;
-        camera.insert("dir_y", 0.5)?;
-        camera.insert("dir_z", -1.0)?;
-        camera.insert("automatic", true)?;
+        let camera = object! {
+            "x" : 0.0,
+            "y" : 0.0,
+            "z" : 0.0,
+            "dir_x": 1.0,
+            "dir_y": 0.5,
+            "dir_z": -1.0,
+            "automatic": true
+        };
         new_scene.insert("camera", camera)?;
         // Add the two bits of geometry
         let mut geom = JsonValue::new_object();
-        let mut line = JsonValue::new_object();
-        line.insert("radius", 0.01)?;
-        line.insert("length", lengths)?;
-        line.insert("type", "cylinder")?;
-        geom.insert("line", line)?;
-        let mut ball = JsonValue::new_object();
-        ball.insert("radius", 0.01)?;
-        ball.insert("type", "sphere")?;
-        geom.insert("ball", ball)?;
+        let rad_scale = 0.6_f64;
+        for i in 0..=min_dia {
+            let radius = 0.3 * rad_scale.powi(i as i32 + 1);
+            let line = object!{
+                "radius" : radius,
+                "length" : lengths,
+                "type": "cylinder"
+            };
+            let ball = object!{
+                "radius" : radius,
+                "type": "sphere"
+            };
+            geom.insert(&format!("ball_{}", i), ball)?;
+            geom.insert(&format!("line_{}", i), line)?;
+        }
         new_scene.insert("geometries", geom)?;
         // Add a red material
-        let mut materials = JsonValue::new_object();
-        let mut red = JsonValue::new_object();
-        red.insert("type", "colour")?;
-        red.insert("r", 200)?;
-        red.insert("g", 50)?;
-        red.insert("b", 50)?;
-        red.insert("reflect", 0.3)?;
-        materials.insert("red", red)?;
+        let materials = object!{
+            "mat" : object! {
+                "type" : "colour",
+                "r" : 100,
+                "g" : 80,
+                "b" : 50,
+                "reflect" : 0.3
+            }
+        };
         new_scene.insert("materials", materials)?;
         // Add entities for each line
         let mut entities = JsonValue::new_array();
-        let mut sball_entity = JsonValue::new_object();
         let pt = lines.first().unwrap().0;
-        sball_entity.insert("geom", "ball")?;
-        sball_entity.insert("x", pt.x)?;
-        sball_entity.insert("y", pt.y)?;
-        sball_entity.insert("z", pt.z)?;
-        sball_entity.insert("mat", "red")?;
+        let sball_entity = object! {
+            "geom" : "ball_0",
+            "x" : pt.x,
+            "y" : pt.y,
+            "z" : pt.z,
+            "mat" : "mat"
+        };
         entities.push(sball_entity)?;
-        for (start, end) in lines {
+        for (start, end, dia) in lines {
             let mid = start.to_vec().lerp(end.to_vec(), 0.5);
             let diff = end - start;
-            let mut line_entity = JsonValue::new_object();
-            line_entity.insert("geom", "line")?;
-            line_entity.insert("x", mid.x)?;
-            line_entity.insert("y", mid.y)?;
-            line_entity.insert("z", mid.z)?;
-            line_entity.insert("dir_x", diff.x)?;
-            line_entity.insert("dir_y", diff.y)?;
-            line_entity.insert("dir_z", diff.z)?;
-            line_entity.insert("mat", "red")?;
-            let mut ball_entity = JsonValue::new_object();
-            ball_entity.insert("geom", "ball")?;
-            ball_entity.insert("x", end.x)?;
-            ball_entity.insert("y", end.y)?;
-            ball_entity.insert("z", end.z)?;
-            ball_entity.insert("mat", "red")?;
+            let line_entity = object! {
+                "geom" : format!("line_{}", dia),
+                "x" : mid.x,
+                "y" : mid.y,
+                "z" : mid.z,
+                "dir_x" : diff.x,
+                "dir_y" : diff.y,
+                "dir_z" : diff.z,
+                "mat" : "mat"
+            };
+            let ball_entity = object! {
+                "geom" : format!("ball_{}", dia),
+                "x" : end.x,
+                "y" : end.y,
+                "z" : end.z,
+                "mat" : "mat"
+            };
             entities.push(line_entity)?;
             entities.push(ball_entity)?;
         }
         new_scene.insert("entities", entities)?;
+        let mut f = fs::File::create("test.json").unwrap();
+        new_scene.write_pretty(&mut f, 4).unwrap();
         ray::generate(&new_scene).map_err(
             |_| json::JsonError::UnexpectedEndOfJson
         )
     }
 
-    fn make_lines_3d(&self) -> Vec<(Point3<f64>, Point3<f64>)> {
-        let mut coords : Matrix3<f64> = Matrix3::from_scale(1.0);
+    fn make_lines_3d(&self) -> Vec<(Point3<f64>, Point3<f64>, usize)> {
+        let mut coords : Matrix3<f64> = Matrix3::from_angle_y(Rad(-PI / 2.0));
         let mut pos = point3(0.0, 0.0, 0.0);
-        let mut stack : Vec<(Point3<f64>, Matrix3<f64>)> = Vec::new();
+        let mut dia = 0;
+        let mut stack : Vec<(Point3<f64>, Matrix3<f64>, usize)> = Vec::new();
         let mut lines = Vec::new();
         for instruction in self.instructions.iter() {
             match instruction {
@@ -235,16 +256,20 @@ impl LogoProgram {
                 TurtleRule::ForwardDraw(dist) => {
                     let start = pos;
                     pos += coords.x * (*dist);
-                    lines.push((start, pos));
+                    lines.push((start, pos, dia));
                 }
                 TurtleRule::PopStack => {
-                    if let Some((p, c)) = stack.pop() {
+                    if let Some((p, c, d)) = stack.pop() {
                         pos = p;
                         coords = c;
+                        dia = d;
                     }
                 }
                 TurtleRule::PushStack => {
-                    stack.push((pos, coords));
+                    stack.push((pos, coords, dia));
+                },
+                TurtleRule::ReduceDiameter => {
+                    dia += 1;
                 }
             };
         }
