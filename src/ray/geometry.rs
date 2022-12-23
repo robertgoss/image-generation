@@ -168,7 +168,7 @@ impl<Base> Prism<Base>
   where Base : TraceGeometry2 {
     fn trace(&self, ray : &Ray) -> Option<(f64, UnitVector3)> {
         if ray.start.z > self.half_length {
-            if ray.direction.z > 0.0 {
+            if ray.direction.z >= 0.0 {
                 return None;
             }
             // Get intersection with top plane 
@@ -179,7 +179,7 @@ impl<Base> Prism<Base>
             }
         } 
         if ray.start.z < -self.half_length {
-            if ray.direction.z < 0.0 {
+            if ray.direction.z <= 0.0 {
                 return None;
             }
             // Get intersection with top plane 
@@ -199,7 +199,14 @@ impl<Base> Prism<Base>
         let ray_length = ray_length_sq.sqrt();
         ray2.direction = ray2.direction / ray_length;
         if let Some((t_contact_2d, norm)) = self.base.trace(&ray2) {
-            Some((t_contact_2d / ray_length, vec3(norm.x, norm.y, 0.0)))
+            // Check the z pos of hit
+            let t_contact = t_contact_2d / ray_length;
+            let z = ray.at(t_contact).z;
+            if z.abs() < self.half_length {
+                Some((t_contact, vec3(norm.x, norm.y, 0.0)))
+            } else {
+                None
+            }
         } else {
             None
         }
@@ -234,10 +241,10 @@ impl OriginBox {
     fn new(half_lengths : &Vector3<f64>) -> OriginBox {
         OriginBox {
             prism : Prism {
-                half_length : half_lengths.z,
+                half_length : half_lengths.z / 2.0,
                 base : OriginSquare {
-                    x_half : half_lengths.x,
-                    y_half : half_lengths.y
+                    x_half : half_lengths.x / 2.0,
+                    y_half : half_lengths.y / 2.0
                 }
             }
         }
@@ -459,7 +466,7 @@ mod tests {
         );
         // Miss
         assert!(trace.is_some());
-        assert_abs_diff_eq!(trace.unwrap().0, 9.0);
+        assert_abs_diff_eq!(trace.unwrap().0, 9.5);
         assert_abs_diff_eq!(trace.unwrap().1, vec3(-1.0, 0.0, 0.0));
     }
 
@@ -581,6 +588,17 @@ mod tests {
     }
 
     #[test]
+    fn test_trace_cylinder_horizontal_miss() {
+        let cylinder = Cylinder::new(0.5, 0.5);
+        // Fire directy up ( under)
+        let trace = cylinder.trace(&
+            Ray {start : point3(2.0,0.0,1.1), direction : vec3(-1.0,0.0,0.0)}
+        );
+        // Hit
+        assert!(trace.is_none());
+    }
+
+    #[test]
     fn test_trace_cylinder_slant_hit() {
         let cylinder = Cylinder::new(0.5, 0.5);
         let l :f64 = 1.0 / 2.0_f64.sqrt();
@@ -592,6 +610,18 @@ mod tests {
         assert!(trace.is_some());
         assert_abs_diff_eq!(trace.unwrap().0, l);
         assert_abs_diff_eq!(trace.unwrap().1, vec3(-1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn test_trace_cylinder_slant_miss() {
+        let cylinder = Cylinder::new(0.5, 0.5);
+        let l :f64 = 1.0 / 2.0_f64.sqrt();
+        // Aim over the top but from the middle
+        let trace = cylinder.trace(&
+            Ray {start : point3(-10.0,0.0,0.25), direction : vec3(l,0.0,-l)}
+        );
+        // Hit
+        assert!(trace.is_none());
     }
 
 
