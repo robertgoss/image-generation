@@ -26,6 +26,7 @@ enum TurtleRule {
     TurnZ(f64),
     PushStack,
     PopStack,
+    IncColour,
     ReduceDiameter,
     ForwardDraw(f64),
     Forward(f64)
@@ -53,6 +54,7 @@ impl TurtleRule {
             "[" => Some(TurtleRule::PushStack),
             "]" => Some(TurtleRule::PopStack),
             "!" => Some(TurtleRule::ReduceDiameter),
+            "'" => Some(TurtleRule::IncColour),
             _  => None
         }
     }
@@ -63,7 +65,7 @@ fn cmp_d(a : &f64, b : &f64) -> Ordering {
 }
 
 impl LogoProgram {
-    fn render(&self, res_x : usize, res_y : usize) -> RgbImage {
+    fn render(&self, res_x : usize, res_y : usize, colours : &JsonValue) -> RgbImage {
         let lines = self.make_lines_2d();
         let max_x = lines.iter().map(
             |line| max_by(line.0.x, line.1.x, cmp_d)
@@ -77,6 +79,14 @@ impl LogoProgram {
         let min_y = lines.iter().map(
             |line| min_by(line.0.y, line.1.y, cmp_d)
         ).min_by(cmp_d).unwrap();
+        let colours : Vec<Rgb<u8>> = colours.members().map(
+            |c| Rgb([
+                c["r"].as_u8().unwrap_or(255), 
+                c["g"].as_u8().unwrap_or(255),
+                c["b"].as_u8().unwrap_or(255)
+            ])
+        ).collect();
+        let white = Rgb([255,255,255]);
         let centre = point2((max_x+min_x) / 2.0, (max_y+min_y) / 2.0);
         let size = vec2((max_x-min_x) *1.06, (max_y-min_y) *1.06);
         let m_size = max_by(size.x, size.y, cmp_d);
@@ -85,7 +95,7 @@ impl LogoProgram {
         let pic_size = vec2(m_size, m_size);
         let base = centre - (pic_size * 0.5);
         let mut image = RgbImage::new(res_x as u32, res_y as u32);
-        for (start, end) in lines {
+        for (start, end, colour) in lines {
             let rel_start_pos = start - base;
             let scale_start = point2(scale_x * rel_start_pos.x, scale_y * rel_start_pos.y);
             let rel_end_pos = end - base;
@@ -94,7 +104,7 @@ impl LogoProgram {
                 &mut image, 
                 (scale_start.x as i32, scale_start.y as i32), 
                 (scale_end.x as i32, scale_end.y as i32), 
-                Rgb([255, 255, 255]),
+                *colours.get(colour).unwrap_or(&white),
                 pixelops::interpolate
             )
         };
@@ -102,9 +112,10 @@ impl LogoProgram {
         
     }
 
-    fn make_lines_2d(&self) -> Vec<(Point2<f64>, Point2<f64>)> {
+    fn make_lines_2d(&self) -> Vec<(Point2<f64>, Point2<f64>, usize)> {
         let mut pos = point2(0.0, 0.0);
         let mut angle = -PI / 2.0;
+        let mut colour = 0;
         let mut lines = Vec::new();
         let mut stack = Vec::new();
         for instruction in self.instructions.iter() {
@@ -118,18 +129,20 @@ impl LogoProgram {
                 TurtleRule::ForwardDraw(dist) => {
                     let start = pos;
                     pos += vec2(dist * angle.cos(), dist * angle.sin());
-                    lines.push((start, pos));
+                    lines.push((start, pos, colour));
                 },
                 TurtleRule::PopStack => {
-                    if let Some((p, a)) = stack.pop() {
+                    if let Some((p, a, c)) = stack.pop() {
                         pos = p;
                         angle = a;
+                        colour = c;
                     }
                 }
                 TurtleRule::PushStack => {
-                    stack.push((pos, angle));
+                    stack.push((pos, angle, colour));
                 },
-                TurtleRule::ReduceDiameter => {}
+                TurtleRule::ReduceDiameter => {},
+                TurtleRule::IncColour => colour += 1
             }
         }
         lines
@@ -144,11 +157,11 @@ impl LogoProgram {
         ).next().unwrap()
     }
 
-    fn render_3d(&self, res_x : usize, res_y : usize) -> Result<RgbImage, json::JsonError> {
+    fn render_3d(&self, res_x : usize, res_y : usize, colours : &JsonValue) -> Result<RgbImage, json::JsonError> {
         let lines = self.make_lines_3d();
         let lengths = self.lengths();
         let min_dia = lines.iter().map(
-            |(_,_,d)| *d
+            |(_,_,d, _)| *d
         ).max().unwrap();
         // Make json document to render
         let mut new_scene = object! {
@@ -187,15 +200,13 @@ impl LogoProgram {
         }
         new_scene.insert("geometries", geom)?;
         // Add a red material
-        let materials = object!{
-            "mat" : object! {
-                "type" : "colour",
-                "r" : 100,
-                "g" : 80,
-                "b" : 50,
-                "reflect" : 0.3
-            }
-        };
+        let mut materials = JsonValue::new_object();
+        for (i,colour) in colours.members().enumerate() {
+            let mut mat = colour.clone();
+            mat.insert("type", "colour")?;
+            mat.insert("reflect", 0.2)?;
+            materials.insert(&i.to_string(), mat)?;
+        }
         new_scene.insert("materials", materials)?;
         // Add entities for each line
         let mut entities = JsonValue::new_array();
@@ -208,7 +219,7 @@ impl LogoProgram {
             "mat" : "mat"
         };
         entities.push(sball_entity)?;
-        for (start, end, dia) in lines {
+        for (start, end, dia, colour) in lines {
             let mid = start.to_vec().lerp(end.to_vec(), 0.5);
             let diff = end - start;
             let line_entity = object! {
@@ -219,14 +230,14 @@ impl LogoProgram {
                 "dir_x" : diff.x,
                 "dir_y" : diff.y,
                 "dir_z" : diff.z,
-                "mat" : "mat"
+                "mat" : colour.to_string()
             };
             let ball_entity = object! {
                 "geom" : format!("ball_{}", dia),
                 "x" : end.x,
                 "y" : end.y,
                 "z" : end.z,
-                "mat" : "mat"
+                "mat" : colour.to_string()
             };
             entities.push(line_entity)?;
             entities.push(ball_entity)?;
@@ -239,11 +250,12 @@ impl LogoProgram {
         )
     }
 
-    fn make_lines_3d(&self) -> Vec<(Point3<f64>, Point3<f64>, usize)> {
+    fn make_lines_3d(&self) -> Vec<(Point3<f64>, Point3<f64>, usize, usize)> {
         let mut coords : Matrix3<f64> = Matrix3::from_angle_y(Rad(-PI / 2.0));
         let mut pos = point3(0.0, 0.0, 0.0);
         let mut dia = 0;
-        let mut stack : Vec<(Point3<f64>, Matrix3<f64>, usize)> = Vec::new();
+        let mut colour = 0;
+        let mut stack : Vec<(Point3<f64>, Matrix3<f64>, usize, usize)> = Vec::new();
         let mut lines = Vec::new();
         for instruction in self.instructions.iter() {
             match instruction {
@@ -256,20 +268,24 @@ impl LogoProgram {
                 TurtleRule::ForwardDraw(dist) => {
                     let start = pos;
                     pos += coords.x * (*dist);
-                    lines.push((start, pos, dia));
+                    lines.push((start, pos, dia, colour));
                 }
                 TurtleRule::PopStack => {
-                    if let Some((p, c, d)) = stack.pop() {
+                    if let Some((p, c, d, cl)) = stack.pop() {
                         pos = p;
                         coords = c;
                         dia = d;
+                        colour = cl;
                     }
                 }
                 TurtleRule::PushStack => {
-                    stack.push((pos, coords, dia));
+                    stack.push((pos, coords, dia, colour));
                 },
                 TurtleRule::ReduceDiameter => {
                     dia += 1;
+                }
+                TurtleRule::IncColour => {
+                    colour += 1;
                 }
             };
         }
@@ -357,7 +373,8 @@ struct LSystemSimulation {
     resolution : (usize, usize),
     dim3d : bool,
     depth : usize,
-    axiom : Vec<String>
+    axiom : Vec<String>,
+    colours : JsonValue
 }
 
 impl LSystemSimulation {
@@ -378,7 +395,8 @@ impl LSystemSimulation {
                 resolution: (res_x, res_y), 
                 depth: depth,
                 dim3d : render_dim,
-                axiom: axiom
+                axiom: axiom,
+                colours: input["colours"].clone()
             }
         )
     }
@@ -389,9 +407,9 @@ impl LSystemSimulation {
         println!("Derivation has {} symbols", symbols.len());
         let logo = self.system.draw(&symbols);
         if self.dim3d {
-            logo.render_3d(self.resolution.0, self.resolution.1).unwrap()
+            logo.render_3d(self.resolution.0, self.resolution.1, &self.colours).unwrap()
         } else {
-            logo.render(self.resolution.0, self.resolution.1)
+            logo.render(self.resolution.0, self.resolution.1, &self.colours)
         }
     }
 }
