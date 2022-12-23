@@ -119,9 +119,9 @@ impl<'a> Entity<'a> {
         // Want camera with z pointing down dir, y points (as close as possible to z)
         // and x whatever is left.
         let xv = if dir.z.abs() > 1.0 - 1.0e-8 {
-            dir.cross(vec3(0.0, -1.0, 0.0))
+            dir.cross(vec3(0.0, -1.0, 0.0)).normalize()
         } else {
-            dir.cross(vec3(0.0, 0.0, -1.0))
+            dir.cross(vec3(0.0, 0.0, -1.0)).normalize()
         };
         let yv = -xv.cross(dir);
         let to_world = Matrix4{ 
@@ -372,7 +372,7 @@ impl<'a> Scene<'a> {
         }
         let bound = self.bound_scene();
         let centre = bound.mid();
-        let radius = bound.radius() * 5.0;
+        let radius = bound.radius() * 3.0;
         let pos = centre - self.camera.mat.z * radius;
         self.camera.pos = pos;
     }
