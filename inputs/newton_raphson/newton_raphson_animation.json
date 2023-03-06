@@ -4,8 +4,8 @@
     "base" : {
         "algorithm" : "newton-raphson",
         "polynomial" : [1, 0.001, 0, 20, 0, 0.001, 1],
-        "resolution_x" : 1024,
-        "resolution_y" : 1024,
+        "resolution_x" : 512,
+        "resolution_y" : 512,
         "max_iterations" : 128,
         "colour" : false,
         "centre_x" : 0.0001,
