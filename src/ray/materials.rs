@@ -3,6 +3,20 @@ use image::Rgb;
 use json::JsonValue;
 use cgmath::Point3;
 
+
+pub fn rgb_lerp(
+    parameter : f64,
+    colour1 : Rgb<f64>,
+    colour2 : Rgb<f64>
+) -> Rgb<f64> {
+    let inverse = 1.0 - parameter;
+    Rgb([
+        colour1.0[0] * parameter + colour2.0[0] * inverse,
+        colour1.0[1] * parameter + colour2.0[1] * inverse,
+        colour1.0[2] * parameter + colour2.0[2] * inverse
+    ])
+}
+
 pub struct Colour {
     colour : Rgb<f64>,
     reflectivity : f64
@@ -111,7 +125,7 @@ impl Material for Colour {
         &self,
         _mats : &Materials,
         _local_point : &Point3<f64>,
-        reflection : Option<Rgb<f64>>
+        _reflection : Option<Rgb<f64>>
     ) -> Rgb<f64> {
         self.colour
     }

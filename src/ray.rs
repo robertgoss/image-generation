@@ -2,7 +2,6 @@
 //
 // Current quadratic and only supports spheres and planes
 
-use std::f64::consts::PI;
 use std::io::{Error, ErrorKind};
 
 use cgmath::{prelude::*, Matrix3};
@@ -16,7 +15,7 @@ mod geometry2;
 mod materials;
 
 use geometry::{TraceGeometry, Ray, Geometries};
-use materials::{Material, Materials};
+use materials::{Material, Materials, rgb_lerp};
 
 use self::geometry::AABox;
 
@@ -50,7 +49,6 @@ struct Scene<'a> {
     camera : Camera,
     materials : &'a Materials,
     entities : Vec<Entity<'a>>,
-    background : Colour,
     resolution : (usize, usize),
     max_depth : u8
 }
@@ -156,10 +154,17 @@ impl<'a> Contact<'a> {
 }
 
 impl<'a> Scene<'a> {
+
+    fn background(self : &Self, ray : &Ray) -> Colour {
+        let white = Rgb([1.0, 1.0, 1.0]);
+        let blue = Rgb([0.5, 0.6, 1.0]);
+        rgb_lerp(0.5 * (ray.direction.z + 1.0), blue, white)
+    }
+
     fn trace_ray(self : &Self, ray : &Ray, depth : u8) -> Colour {
         self.find_best_contact(ray).map(
             |contact| self.trace_contact(ray, &contact, depth)
-        ).unwrap_or(self.background)
+        ).unwrap_or(self.background(ray))
     }
 
     fn find_best_contact(self : &Self, ray : &Ray) -> Option<Contact> {
@@ -193,7 +198,6 @@ impl<'a> Scene<'a> {
         let res_x = input["resolution_x"].as_usize().unwrap_or(1024);
         let res_y = input["resolution_y"].as_usize().unwrap_or(1024);
         let max_depth = input["max_depth"].as_u8().unwrap_or(4);
-        let use_ambiant = input["ambiant_lighting"].as_bool().unwrap_or(false);
         let camera = Camera::from_json(&input["camera"]).ok_or(
             Error::new(ErrorKind::InvalidData, "Missing camera")
         )?;
@@ -204,7 +208,6 @@ impl<'a> Scene<'a> {
         Ok(Scene {
             camera,
             resolution : (res_x, res_y),
-            background : Rgb([0.7,0.7,0.8]),
             entities,
             max_depth,
             materials,
