@@ -17,6 +17,21 @@ pub fn rgb_lerp(
     ])
 }
 
+fn rgb_lerp3(
+    parameter : f64,
+    parameter2 : f64,
+    colour1 : &Rgb<f64>,
+    colour2 : &Rgb<f64>,
+    colour3 : &Rgb<f64>
+) -> Rgb<f64> {
+    let inverse = 1.0 - parameter - parameter2;
+    Rgb([
+        colour1.0[0] * parameter + colour2.0[0] * parameter2 + colour3.0[0] * inverse,
+        colour1.0[1] * parameter + colour2.0[1] * parameter2 + colour3.0[1] * inverse,
+        colour1.0[2] * parameter + colour2.0[2] * parameter2 + colour3.0[2] * inverse,
+    ])
+}
+
 pub fn rgb_sum(
     colour1 : &mut Rgb<f64>,
     colour2 : &Rgb<f64>
@@ -28,7 +43,8 @@ pub fn rgb_sum(
 
 pub struct Colour {
     colour : Rgb<f64>,
-    reflectivity : f64
+    reflectivity : f64,
+    diffusion : f64,
 }
 
 pub struct Checker {
@@ -50,7 +66,7 @@ impl Materials {
         let mut materials = Materials {
             names : HashMap::new(),
             materials : Vec::new(),
-            default : Colour { colour: Rgb([0.8,0.8,0.8]), reflectivity: 0.0 }
+            default : Colour { colour: Rgb([0.8,0.8,0.8]), reflectivity: 0.0, diffusion : 0.5 }
         };
         for (mat_name, mat_input) in input["materials"].entries() {
             if let Some(mat) = parse_material(mat_input, &materials) {
@@ -89,7 +105,8 @@ pub trait Material {
         &self, 
         mats : &Materials,
         local : &Point3<f64>,
-        reflection : Option<Rgb<f64>>
+        reflection : &Rgb<f64>,
+        diffuse : &Rgb<f64>
     ) -> Rgb<f64>;
 }
 
@@ -102,9 +119,10 @@ impl Colour {
         let b = input["b"].as_u8()?;
         let b_f64 = b as f64 / 255.0;
         let reflectivity = input["reflect"].as_f64()?;
+        let diffusion = 0.5 * (1.0 - reflectivity);
         Some(
             Box::new(
-                Colour { colour: Rgb([r_f64,g_f64,b_f64]), reflectivity }
+                Colour { colour: Rgb([r_f64,g_f64,b_f64]), reflectivity, diffusion }
             )
         )
     }
@@ -134,9 +152,16 @@ impl Material for Colour {
         &self,
         _mats : &Materials,
         _local_point : &Point3<f64>,
-        _reflection : Option<Rgb<f64>>
+        reflection : &Rgb<f64>,
+        diffuse : &Rgb<f64>
     ) -> Rgb<f64> {
-        self.colour
+        rgb_lerp3(
+            self.reflectivity,
+            self.diffusion,
+            reflection,
+            diffuse,
+            &self.colour
+        )
     }
 
 }
@@ -146,12 +171,13 @@ impl Material for Checker {
         &self,
         mats : &Materials,
         local_point : &Point3<f64>,
-        reflection : Option<Rgb<f64>>,
+        reflection : &Rgb<f64>,
+        diffuse : &Rgb<f64>
     ) -> Rgb<f64> {
         let x = (local_point.x * self.step) as i64;
         let y = (local_point.y * self.step) as i64;
         let z = (local_point.z * self.step) as i64;
         let index = if (x+y+z) % 2 == 0 { self.material_even } else { self.material_odd };
-        mats.materials[index].colour(mats, local_point, reflection)
+        mats.materials[index].colour(mats, local_point, reflection, diffuse)
     }
 }

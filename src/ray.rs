@@ -154,6 +154,15 @@ impl<'a> Contact<'a> {
         let dir = ray_in.direction - align * self.normal;
         Ray{start: self.pos, direction : dir}
     }
+
+    fn diffuse_ray<Rng>(self : &Self, rng : &mut Rng) -> Ray
+        where Rng : rand::Rng
+    {
+        // Generate random point on unit sphere
+        let vec = vec3(rng.gen::<f64>()-0.5, rng.gen::<f64>()-0.5, rng.gen::<f64>()-0.5);
+        let dir = (self.normal + vec.normalize()).normalize();
+        Ray{start: self.pos, direction : dir}
+    }
 }
 
 impl<'a> Scene<'a> {
@@ -164,9 +173,11 @@ impl<'a> Scene<'a> {
         rgb_lerp(0.5 * (ray.direction.z + 1.0), blue, white)
     }
 
-    fn trace_ray(self : &Self, ray : &Ray, depth : u8) -> Colour {
+    fn trace_ray<Rng>(self : &Self, rng : &mut Rng, ray : &Ray, depth : u8) -> Colour
+      where Rng : rand::Rng
+    {
         self.find_best_contact(ray).map(
-            |contact| self.trace_contact(ray, &contact, depth)
+            |contact| self.trace_contact(rng, ray, &contact, depth)
         ).unwrap_or(self.background(ray))
     }
 
@@ -178,16 +189,25 @@ impl<'a> Scene<'a> {
         )
     }
 
-    fn trace_contact(self : &Self, ray : &Ray, contact : &Contact, depth : u8) -> Colour {
-        let reflection = if depth == 0 {
-            None
+    fn trace_contact<Rng>(self : &Self, rng: &mut Rng, ray : &Ray, contact : &Contact, depth : u8) -> Colour
+      where Rng : rand::Rng
+    {
+        let reflection: Colour = if depth == 0 {
+            Rgb([0.0,0.0,0.0])
         } else {
-            Some(self.trace_ray(&contact.reflection_ray(ray), depth - 1))
+            self.trace_ray(rng, &contact.reflection_ray(ray), depth - 1)
+        };
+        let diffuse : Colour = if depth == 0 {
+            Rgb([0.0,0.0,0.0])
+        } else {
+            let diffuse_ray = contact.diffuse_ray(rng);
+            self.trace_ray(rng, &diffuse_ray, depth - 1)
         };
         contact.material.colour(
             self.materials,
-             &contact.local_pos,
-             reflection
+            &contact.local_pos,
+            &reflection,
+            &diffuse
         )
     }
 
@@ -246,7 +266,7 @@ impl<'a> Scene<'a> {
                     let x = 1.0 - (ai / x_res);
                     let y = 1.0 - (aj / y_res);
                     let ray = self.camera.ray(x, y);
-                    let colour = self.trace_ray(&ray, self.max_depth);
+                    let colour = self.trace_ray(&mut rng, &ray, self.max_depth);
                     rgb_sum(&mut accumulated_colour, &colour);
                 }
                 let sample_scale = 1.0 / self.antialiasing_samples as f64;
