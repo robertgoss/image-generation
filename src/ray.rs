@@ -22,6 +22,7 @@ use self::geometry::AABox;
 
 // Helper to remember which we want to always be pre-unitized
 type UnitVector3 = Vector3<f64>;
+type Colour = Rgb<f64>;
 
 struct Entity<'a> {
     geometry : &'a dyn TraceGeometry,
@@ -49,9 +50,7 @@ struct Scene<'a> {
     camera : Camera,
     materials : &'a Materials,
     entities : Vec<Entity<'a>>,
-    background : Rgb<u8>,
-    background_illumination : u8,
-    use_ambiant_illumination : bool,
+    background : Colour,
     resolution : (usize, usize),
     max_depth : u8
 }
@@ -154,80 +153,13 @@ impl<'a> Contact<'a> {
         let dir = ray_in.direction - align * self.normal;
         Ray{start: self.pos, direction : dir}
     }
-
-    fn light_rays5(self : &Self) -> [UnitVector3;5] {
-        let inv_sqrt2 = 0.5_f64.sqrt();
-        let u: UnitVector3 = if self.normal.x.abs() > 1.0-1e-6 {
-            (vec3(1.0,0.0,0.0) - self.normal.x * self.normal).normalize()
-        } else {
-            (vec3(0.0,1.0,0.0) - self.normal.x * self.normal).normalize()
-        };
-        let v = self.normal.cross(u);
-        [
-            self.normal,
-            inv_sqrt2 * (u + self.normal),
-            inv_sqrt2 * (-u + self.normal),
-            inv_sqrt2 * (v + self.normal),
-            inv_sqrt2 * (-v + self.normal)
-        ]
-    }
-
-    fn light_rays9(self : &Self) -> [UnitVector3;9] {
-        let inv_sqrt2 = 0.5_f64.sqrt();
-        let u: UnitVector3 = if self.normal.x.abs() > 1.0-1e-6 {
-            (vec3(1.0,0.0,0.0) - self.normal.x * self.normal).normalize()
-        } else {
-            (vec3(0.0,1.0,0.0) - self.normal.x * self.normal).normalize()
-        };
-        let v = self.normal.cross(u);
-        let lambda = 3.0 * inv_sqrt2 / 5.0;
-        let n1 = inv_sqrt2 * self.normal;
-        let n2 = 4.0/5.0 * self.normal;
-        [
-            self.normal,
-            (inv_sqrt2 * u) + n1,
-            (inv_sqrt2 * -u) + n1,
-            (inv_sqrt2 * v) + n1,
-            (inv_sqrt2 * -v) + n1,
-            (lambda * (u+v)) + n2,
-            (lambda * (u-v)) + n2,
-            (lambda * (-u+v)) + n2,
-            (lambda * (-u-v)) + n2,
-        ]
-    }
-
-    fn light_rays_fine(&self) -> Vec<UnitVector3> {
-        let u: UnitVector3 = if self.normal.x.abs() > 1.0-1e-6 {
-            (vec3(1.0,0.0,0.0) - self.normal.x * self.normal).normalize()
-        } else {
-            (vec3(0.0,1.0,0.0) - self.normal.x * self.normal).normalize()
-        };
-        let v = self.normal.cross(u);
-        let num = 128;
-        let turns = 5;
-        // Spiral up - warning too much trig
-        (0..num).map(
-            |i| {
-                let theta = (i as f64 * PI) / (2.0 * num as f64);
-                let phi = (i as f64 * PI * 2.0 * turns as f64) / (num as f64);
-                theta.sin() * self.normal 
-                + theta.cos() * (phi.sin() * u + phi.cos() * v)
-            }
-        ).collect()
-    }
 }
 
 impl<'a> Scene<'a> {
-    fn trace_ray(self : &Self, ray : &Ray, depth : u8) -> Rgb<u8> {
+    fn trace_ray(self : &Self, ray : &Ray, depth : u8) -> Colour {
         self.find_best_contact(ray).map(
             |contact| self.trace_contact(ray, &contact, depth)
         ).unwrap_or(self.background)
-    }
-
-    fn trace_illumination(self : &Self, ray : &Ray, depth : u8) -> u8 {
-        self.find_best_contact(ray).map(
-            |contact| self.trace_contact_illumination(&contact, false, depth)
-        ).unwrap_or(self.background_illumination)
     }
 
     fn find_best_contact(self : &Self, ray : &Ray) -> Option<Contact> {
@@ -238,73 +170,17 @@ impl<'a> Scene<'a> {
         )
     }
 
-    fn trace_contact(self : &Self, ray : &Ray, contact : &Contact, depth : u8) -> Rgb<u8> {
-        let relfection = if depth == 0 {
+    fn trace_contact(self : &Self, ray : &Ray, contact : &Contact, depth : u8) -> Colour {
+        let reflection = if depth == 0 {
             None
         } else {
             Some(self.trace_ray(&contact.reflection_ray(ray), depth - 1))
         };
-        let illumination = if self.use_ambiant_illumination {
-            if depth == 0 {
-                self.trace_contact_illumination(contact, depth == self.max_depth, 1)
-            } else {
-                self.trace_contact_illumination(contact, depth == self.max_depth, 2)
-            }
-        } else {
-            255
-        };
         contact.material.colour(
             self.materials,
-             &contact.local_pos, 
-             illumination,
-             relfection
+             &contact.local_pos,
+             reflection
         )
-    }
-
-    fn trace_contact_illumination(self : &Self, contact : &Contact, fine : bool, depth : u8) -> u8 {
-        let surface_glow = contact.material.illumination(
-            self.materials,
-             &contact.local_pos
-        ) as u32;
-        let merged_light :u32 = if fine {
-            let fine_dirs = contact.light_rays_fine();
-            let num = fine_dirs.len() as u32;
-            fine_dirs.into_iter().map(
-                |dir| self.trace_illumination(
-                    &Ray { start: contact.pos, direction : dir }, 
-                    1
-                ) as u32
-            ).sum::<u32>() / num
-        } else {
-            if depth == 0 {
-                0
-            } else {
-                if depth == 1 {
-                    contact.light_rays5().into_iter().map(
-                        |dir| self.trace_illumination(
-                            &Ray { start: contact.pos, direction : dir }, 
-                            0
-                        ) as u32
-                    ).sum::<u32>() / 5
-                } else {
-                    contact.light_rays9().into_iter().map(
-                        |dir| self.trace_illumination(
-                            &Ray { start: contact.pos, direction : dir }, 
-                            depth - 1
-                        ) as u32
-                    ).sum::<u32>() / 9
-                }
-            }
-        };
-        if surface_glow != 0 {
-            if surface_glow + merged_light > 255 {
-                255
-            } else {
-                (surface_glow + merged_light) as u8
-            }
-        } else { 
-            merged_light as u8
-        }
     }
 
     fn from_json<'geom, 'mat>(
@@ -326,25 +202,23 @@ impl<'a> Scene<'a> {
         ).collect();
         println!("Scene has {} entities", entities.len());
         Ok(Scene {
-            camera : camera,
+            camera,
             resolution : (res_x, res_y),
-            background : Rgb([200,200,200]),
-            background_illumination : 240,
-            entities : entities,
-            max_depth : max_depth,
-            materials : materials,
-            use_ambiant_illumination: use_ambiant
+            background : Rgb([0.7,0.7,0.8]),
+            entities,
+            max_depth,
+            materials,
         })
     }
 
     fn bound_scene(&self) -> geometry::AABox {
-        let inital = geometry::AABox {
+        let initial = geometry::AABox {
             min : self.camera.pos,
             max : self.camera.pos
         };
         self.entities.iter().filter_map(
             |entity| entity.geometry.bound(&entity.to_world)
-        ).fold(inital, |aabox : AABox, other| aabox.merge(&other))
+        ).fold(initial, |aabox : AABox, other| aabox.merge(&other))
     }
 
 
@@ -359,7 +233,10 @@ impl<'a> Scene<'a> {
                 let y = 1.0 - (j as f64 / self.resolution.1 as f64);
                 let ray = self.camera.ray(x, y);
                 let colour = self.trace_ray(&ray, self.max_depth);
-                img.put_pixel(i as u32, j as u32, colour);
+                let r = (colour.0[0] * 255.0) as u8;
+                let g = (colour.0[1] * 255.0) as u8;
+                let b = (colour.0[2] * 255.0) as u8;
+                img.put_pixel(i as u32, j as u32,Rgb([r,g,b]));
             }
         }
 

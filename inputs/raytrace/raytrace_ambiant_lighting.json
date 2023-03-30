@@ -1,9 +1,12 @@
 {
     "algorithm" : "raytrace",
-    "resolution_x" : 1024,
-    "resolution_y" : 1024,
+    "resolution_x" : 512,
+    "resolution_y" : 512,
     "max_depth" : 5,
-    "ambiant_lighting" : true,
+    "camera" : {
+        "x" : 0, "y" : 0, "z" : 1.0,
+        "dir_x" : 0, "dir_y" : 1 , "dir_z" : 0
+    },
     "materials" : {
         "dull_grey" : {"type" : "colour", "r" : 100, "g" : 100, "b" : 100, "reflect": 0.0}
     },
