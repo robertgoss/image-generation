@@ -9,6 +9,7 @@ use cgmath::{point3, vec3, vec4, Point3, Vector3, Matrix4};
 
 use json::JsonValue;
 use image::{Rgb, RgbImage};
+use rand::Rng;
 
 mod geometry;
 mod geometry2;
@@ -16,6 +17,7 @@ mod materials;
 
 use geometry::{TraceGeometry, Ray, Geometries};
 use materials::{Material, Materials, rgb_lerp};
+use crate::ray::materials::rgb_sum;
 
 use self::geometry::AABox;
 
@@ -50,6 +52,7 @@ struct Scene<'a> {
     materials : &'a Materials,
     entities : Vec<Entity<'a>>,
     resolution : (usize, usize),
+    antialiasing_samples : usize,
     max_depth : u8
 }
 
@@ -209,6 +212,7 @@ impl<'a> Scene<'a> {
             camera,
             resolution : (res_x, res_y),
             entities,
+            antialiasing_samples: 100,
             max_depth,
             materials,
         })
@@ -230,15 +234,25 @@ impl<'a> Scene<'a> {
             self.resolution.0 as u32, 
             self.resolution.1 as u32
         );
+        let x_res = self.resolution.0 as f64;
+        let y_res = self.resolution.1 as f64;
+        let mut rng = rand::thread_rng();
         for i in 0..self.resolution.0 {
-            for j in 0..self.resolution.1 {
-                let x = 1.0 - (i as f64 / self.resolution.0 as f64);
-                let y = 1.0 - (j as f64 / self.resolution.1 as f64);
-                let ray = self.camera.ray(x, y);
-                let colour = self.trace_ray(&ray, self.max_depth);
-                let r = (colour.0[0] * 255.0) as u8;
-                let g = (colour.0[1] * 255.0) as u8;
-                let b = (colour.0[2] * 255.0) as u8;
+            for j in 0..self.resolution.0 {
+                let mut accumulated_colour = Rgb([0.0, 0.0, 0.0]);
+                for _ in 0..self.antialiasing_samples {
+                    let ai = i as f64 + rng.gen::<f64>() - 0.5;
+                    let aj = j as f64 + rng.gen::<f64>() - 0.5;
+                    let x = 1.0 - (ai / x_res);
+                    let y = 1.0 - (aj / y_res);
+                    let ray = self.camera.ray(x, y);
+                    let colour = self.trace_ray(&ray, self.max_depth);
+                    rgb_sum(&mut accumulated_colour, &colour);
+                }
+                let sample_scale = 1.0 / self.antialiasing_samples as f64;
+                let r = (accumulated_colour.0[0] * 255.0 * sample_scale) as u8;
+                let g = (accumulated_colour.0[1] * 255.0 * sample_scale) as u8;
+                let b = (accumulated_colour.0[2] * 255.0 * sample_scale) as u8;
                 img.put_pixel(i as u32, j as u32,Rgb([r,g,b]));
             }
         }

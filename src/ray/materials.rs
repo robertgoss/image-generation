@@ -17,6 +17,15 @@ pub fn rgb_lerp(
     ])
 }
 
+pub fn rgb_sum(
+    colour1 : &mut Rgb<f64>,
+    colour2 : &Rgb<f64>
+) {
+    colour1.0[0] += colour2.0[0];
+    colour1.0[1] += colour2.0[1];
+    colour1.0[2] += colour2.0[2];
+}
+
 pub struct Colour {
     colour : Rgb<f64>,
     reflectivity : f64
