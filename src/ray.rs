@@ -16,7 +16,7 @@ mod geometry2;
 mod materials;
 
 use geometry::{TraceGeometry, Ray, Geometries};
-use materials::{Material, Materials, rgb_lerp};
+use materials::{Material, Materials, ScatterRay, rgb_lerp, rgb_scale};
 use crate::ray::materials::rgb_sum;
 
 use self::geometry::AABox;
@@ -152,7 +152,7 @@ impl<'a> Contact<'a> {
     fn reflection_ray(self : &Self, ray_in : &Ray) -> Ray {
         let align = 2.0*ray_in.direction.dot(self.normal);
         let dir = ray_in.direction - align * self.normal;
-        Ray{start: self.pos, direction : dir}
+        Ray{start: self.pos + dir * 0.0001, direction : dir}
     }
 
     fn diffuse_ray<Rng>(self : &Self, rng : &mut Rng) -> Ray
@@ -161,7 +161,17 @@ impl<'a> Contact<'a> {
         // Generate random point on unit sphere
         let vec = vec3(rng.gen::<f64>()-0.5, rng.gen::<f64>()-0.5, rng.gen::<f64>()-0.5);
         let dir = (self.normal + vec.normalize()).normalize();
-        Ray{start: self.pos, direction : dir}
+        Ray{start: self.pos + dir * 0.0001, direction : dir}
+    }
+
+    fn scatter_ray<Rng>(self : &Self, scatter : &ScatterRay, rng : &mut Rng, ray_in : &Ray) -> Option<Ray>
+      where Rng : rand::Rng
+    {
+        match scatter {
+            ScatterRay::None => None,
+            ScatterRay::Diffuse => Some(self.diffuse_ray(rng)),
+            ScatterRay::Reflection => Some(self.reflection_ray(ray_in))
+        }
     }
 }
 
@@ -170,7 +180,7 @@ impl<'a> Scene<'a> {
     fn background(self : &Self, ray : &Ray) -> Colour {
         let white = Rgb([1.0, 1.0, 1.0]);
         let blue = Rgb([0.5, 0.6, 1.0]);
-        rgb_lerp(0.5 * (ray.direction.z + 1.0), blue, white)
+        rgb_lerp(0.5 * (ray.direction.z + 1.0), &blue, &white)
     }
 
     fn trace_ray<Rng>(self : &Self, rng : &mut Rng, ray : &Ray, depth : u8) -> Colour
@@ -192,23 +202,17 @@ impl<'a> Scene<'a> {
     fn trace_contact<Rng>(self : &Self, rng: &mut Rng, ray : &Ray, contact : &Contact, depth : u8) -> Colour
       where Rng : rand::Rng
     {
-        let reflection: Colour = if depth == 0 {
-            Rgb([0.0,0.0,0.0])
+        if depth == 0 {
+            return Rgb([0.0, 0.0, 0.0]);
+        }
+        let (scatter, attenuation) = contact.material.colour(self.materials,&contact.local_pos);
+        let scatter_ray_opt = contact.scatter_ray(&scatter, rng, ray);
+        if let Some(scatter_ray) = scatter_ray_opt {
+            let scatter_colour = self.trace_ray(rng, &scatter_ray, depth - 1);
+            rgb_scale(&scatter_colour, &attenuation)
         } else {
-            self.trace_ray(rng, &contact.reflection_ray(ray), depth - 1)
-        };
-        let diffuse : Colour = if depth == 0 {
-            Rgb([0.0,0.0,0.0])
-        } else {
-            let diffuse_ray = contact.diffuse_ray(rng);
-            self.trace_ray(rng, &diffuse_ray, depth - 1)
-        };
-        contact.material.colour(
-            self.materials,
-            &contact.local_pos,
-            &reflection,
-            &diffuse
-        )
+            attenuation
+        }
     }
 
     fn from_json<'geom, 'mat>(
