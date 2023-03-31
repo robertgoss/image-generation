@@ -67,11 +67,25 @@ impl Camera {
     }
 
     fn from_json(input : &JsonValue) -> Option<Camera> {
+        // Set the generic
+        let x = input["x"].as_f64()?;
+        let y = input["y"].as_f64()?;
+        let z = input["z"].as_f64()?;
+        let pos = point3(x, y, z);
         let fov = input["fov"].as_f64().unwrap_or(1.0);
-        let dir_x = input["dir_x"].as_f64()?;
-        let dir_y = input["dir_y"].as_f64()?;
-        let dir_z = input["dir_z"].as_f64()?;
-        let dir_vec : Vector3<f64> = vec3(dir_x, dir_y, dir_z).normalize();
+        // Get the direction in different ways
+        let dir_vec = if input.has_key("dir_x") {
+            let dir_x = input["dir_x"].as_f64()?;
+            let dir_y = input["dir_y"].as_f64()?;
+            let dir_z = input["dir_z"].as_f64()?;
+            vec3(dir_x, dir_y, dir_z).normalize()
+        } else {
+            let target_x = input["target_x"].as_f64()?;
+            let target_y = input["target_y"].as_f64()?;
+            let target_z = input["target_z"].as_f64()?;
+            let target = point3(target_x, target_y, target_z);
+            (target - pos).normalize()
+        };
         // Want camera with z pointing down dir, y points (as close as possible to z)
         // and x whatever is left.
         let mat = if dir_vec.z.abs() > 1.0 - 1.0e-8 {
@@ -86,11 +100,6 @@ impl Camera {
             Matrix3{ x : x, y : y, z : dir_vec}
         };
         let automatic = input["automatic"].as_bool().unwrap_or(false);
-        // Set the generic 
-        let x = input["x"].as_f64()?;
-        let y = input["y"].as_f64()?;
-        let z = input["z"].as_f64()?;
-        let pos = point3(x, y, z);
         Some(Camera {
             pos : pos,
             mat : mat,
@@ -225,6 +234,7 @@ impl<'a> Scene<'a> {
         let res_x = input["resolution_x"].as_usize().unwrap_or(1024);
         let res_y = input["resolution_y"].as_usize().unwrap_or(1024);
         let max_depth = input["max_depth"].as_u8().unwrap_or(4);
+        let antialiasing_samples = input["antialiasing_samples"].as_usize().unwrap_or(100);
         let camera = Camera::from_json(&input["camera"]).ok_or(
             Error::new(ErrorKind::InvalidData, "Missing camera")
         )?;
@@ -236,7 +246,7 @@ impl<'a> Scene<'a> {
             camera,
             resolution : (res_x, res_y),
             entities,
-            antialiasing_samples: 100,
+            antialiasing_samples,
             max_depth,
             materials,
         })

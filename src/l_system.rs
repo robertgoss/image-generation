@@ -7,7 +7,7 @@
 //
 // The final result is then drawn a a logo program
 
-use std::{io::{Error, ErrorKind}, collections::HashMap, hash::Hash, cmp::{max_by, min_by, Ordering}, f64::consts::PI, fs};
+use std::{io::{Error, ErrorKind}, collections::HashMap, hash::Hash, cmp::{max_by, min_by, Ordering}, f64::consts::PI};
 
 use cgmath::{Point2, vec2, point2, Matrix3, point3, Point3, Rad, EuclideanSpace, VectorSpace};
 use json::{JsonValue, object};
@@ -243,8 +243,6 @@ impl LogoProgram {
             entities.push(ball_entity)?;
         }
         new_scene.insert("entities", entities)?;
-        let mut f = fs::File::create("test.json").unwrap();
-        new_scene.write_pretty(&mut f, 4).unwrap();
         ray::generate(&new_scene).map_err(
             |_| json::JsonError::UnexpectedEndOfJson
         )

@@ -14,6 +14,7 @@ mod newton_raphson;
 mod ray;
 mod animation;
 mod l_system;
+mod sphere_scene;
 
 fn make_directory_for_image(path_str : &str) -> std::io::Result<()> {
     let path = Path::new(path_str);
@@ -30,6 +31,7 @@ fn make_image(input : &JsonValue) -> std::io::Result<RgbImage> {
         "newton-raphson" => newton_raphson::generate(&input),
         "raytrace" => ray::generate(&input),
         "l_system" => l_system::generate(&input),
+        "sphere_scene" => sphere_scene::generate(&input),
         _ => Err(Error::new(ErrorKind::InvalidData, "Unknown algorithm"))
     }
 }
