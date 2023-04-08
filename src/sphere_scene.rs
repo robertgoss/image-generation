@@ -1,7 +1,7 @@
 use std::io::{Error, ErrorKind};
 use json::*;
 use image::{Rgb, RgbImage};
-use rand::random;
+use rand::SeedableRng;
 
 use cgmath::{point2, point3, Point2, vec2, Vector2};
 use cgmath::{InnerSpace, MetricSpace};
@@ -10,29 +10,48 @@ struct Sphere {
     id : usize,
     radius : f64,
     pos : Point2<f64>,
+    mat_type : String,
     colour : Rgb<u8>
 }
 
 struct SphereScene {
     number_of_spheres : usize,
     resolution : (usize, usize),
+    seed : u64
 }
 
-fn random_in_range(min : f64, max : f64) -> f64 {
-    ((max-min) * random::<f64>()) + min
+fn random_colour<Rng>(rng : &mut Rng) -> Rgb<u8>
+    where Rng : rand::Rng
+{
+    let r = rng.gen::<u8>();
+    let g = rng.gen::<u8>();
+    let b = rng.gen::<u8>();
+    Rgb([r,g,b])
 }
 
-fn random_in_disc() -> Vector2<f64> {
-    let base = 2.0*vec2(random::<f64>() - 0.5, random::<f64>() - 0.5);
+fn random_in_range<Rng>(rng : &mut Rng, min : f64, max : f64) -> f64
+  where Rng : rand::Rng
+{
+    ((max-min) * rng.gen::<f64>()) + min
+}
+
+fn random_in_disc<Rng>(rng : &mut Rng) -> Vector2<f64>
+where Rng : rand::Rng
+{
+    let x = rng.gen::<f64>();
+    let y = rng.gen::<f64>();
+    let base = 2.0*vec2(x - 0.5, y - 0.5);
     if base.magnitude2() < 1.0 {
         base
     } else {
-        random_in_disc()
+        random_in_disc(rng)
     }
 }
 
-fn random_material_type() -> String {
-    if random::<u8>() % 2 == 0 {
+fn random_material_type<Rng>(rng : &mut Rng) -> String
+  where Rng : rand::Rng
+{
+    if rng.gen::<u8>() % 2 == 0 {
         "shiny".to_string()
     } else {
         "dull".to_string()
@@ -44,31 +63,32 @@ impl SphereScene {
         let number_of_spheres = input["number"].as_usize()?;
         let res_x = input["resolution_x"].as_usize().unwrap_or(1024);
         let res_y = input["resolution_y"].as_usize().unwrap_or(1024);
+        let seed = input["seed"].as_u64().unwrap_or(0);
         Some(
             SphereScene {
                 number_of_spheres,
-                resolution: (res_x, res_y)
+                resolution: (res_x, res_y),
+                seed
             }
         )
     }
 
-    fn generate_sphere(&self, index : usize, spheres : &Vec<Sphere>) -> Sphere {
+    fn generate_sphere<Rng>(&self, rng : &mut Rng, index : usize, spheres : &Vec<Sphere>) -> Sphere
+      where Rng : rand::Rng
+    {
         let sphere = Sphere {
             id : index,
-            radius : random_in_range(0.2, 0.8),
-            pos : point2(0.0, 0.0) + (random_in_disc() * 10.0),
-            colour : Rgb([
-                random::<u8>(),
-                random::<u8>(),
-                random::<u8>()
-            ])
+            radius : random_in_range(rng, 0.2, 0.8),
+            pos : point2(0.0, 0.0) + (random_in_disc(rng) * 10.0),
+            mat_type : random_material_type(rng),
+            colour : random_colour(rng)
         };
         // Check overlap
         let overlap = spheres.iter().any(
             |other| sphere.overlap(other)
         );
         if overlap {
-            self.generate_sphere(index, spheres)
+            self.generate_sphere(rng, index, spheres)
         } else {
             sphere
         }
@@ -76,8 +96,9 @@ impl SphereScene {
 
     fn generate_spheres(&self) -> Vec<Sphere> {
         let mut spheres = Vec::new();
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(self.seed);
         for i in 0..self.number_of_spheres {
-            let sphere = self.generate_sphere(i, &spheres);
+            let sphere = self.generate_sphere(&mut rng, i, &spheres);
             spheres.push(sphere);
         }
         spheres
@@ -129,11 +150,12 @@ impl Sphere {
         ).expect("Missing geometries from scene");
     }
 
-    fn add_material(&self, scene : &mut JsonValue) {
+    fn add_material(&self, scene : &mut JsonValue)
+    {
         scene["materials"].insert(
             &self.mat_id(),
             object!{
-                "type" : random_material_type(),
+                "type" : self.mat_type.clone(),
                 "r" : self.colour.0[0],
                 "g" : self.colour.0[1],
                 "b" : self.colour.0[2],
@@ -171,13 +193,8 @@ impl Sphere {
 
 pub fn generate(input : &JsonValue) -> std::io::Result<RgbImage> {
     let sphere_scene = SphereScene::from_json(input).ok_or(
-        Error::new(ErrorKind::InvalidData, "Missing camera")
+        Error::new(ErrorKind::InvalidData, "Could not load input")
     )?;
     let new_scene = sphere_scene.generate_scene();
-
-    // Useful output for debugging
-    let mut f = std::fs::File::create("test.json")?;
-    new_scene.write_pretty(&mut f, 4)?;
-
     crate::ray::generate(&new_scene)
 }

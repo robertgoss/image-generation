@@ -9,7 +9,8 @@ use cgmath::{point3, vec3, vec4, Point3, Vector3, Matrix4};
 
 use json::JsonValue;
 use image::{Rgb, RgbImage};
-use rand::Rng;
+
+use rand::{Rng, SeedableRng};
 
 mod geometry;
 mod geometry2;
@@ -270,8 +271,9 @@ impl<'a> Scene<'a> {
         );
         let x_res = self.resolution.0 as f64;
         let y_res = self.resolution.1 as f64;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
         for i in 0..self.resolution.0 {
+            println!("Line: {}", i);
             for j in 0..self.resolution.0 {
                 let mut accumulated_colour = Rgb([0.0, 0.0, 0.0]);
                 for _ in 0..self.antialiasing_samples {
