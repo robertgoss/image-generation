@@ -349,15 +349,6 @@ impl AABox {
             ), 
         }
     }
-
-    pub fn mid(&self) -> Point3<f64> {
-        Point3::from_vec(self.max.to_vec().lerp(self.min.to_vec(), 0.5))
-    }
-
-    pub fn radius(&self) -> f64 {
-        let diff = self.max - self.min;
-        max_d(diff.x, max_d(diff.y, diff.z)) * 0.5
-    }
 }
 
 pub struct Geometries {

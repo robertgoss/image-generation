@@ -21,6 +21,6 @@ def time_res(num_spheres):
     return time_end - time_start
 
 
-for i in range(1, 120, 2):
+for i in range(0, 120, 10):
     t = time_res(i)
     print("{}: {}".format(i, t))
