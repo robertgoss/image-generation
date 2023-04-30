@@ -20,7 +20,7 @@ mod trace;
 use geometry::{Ray, Geometries};
 use materials::{Materials, rgb_lerp, rgb_scale};
 use crate::ray::materials::rgb_sum;
-use crate::ray::trace::{Contact, Entity, LinearScene, SceneSpace};
+use crate::ray::trace::{Contact, Entity, BSPTreeScene, BoxedTraceSpace};
 
 // Helper to remember which we want to always be pre-unitized
 type Colour = Rgb<f64>;
@@ -32,7 +32,7 @@ struct Camera {
     automatic : bool, // Fit the whole scene in camera
 }
 
-struct RenderScene<'a,Scene>  where Scene : SceneSpace<'a> {
+struct RenderScene<'a,Scene>  where Scene : BoxedTraceSpace<'a> {
     camera : Camera,
     materials : &'a Materials,
     scene : Scene,
@@ -94,7 +94,7 @@ impl Camera {
     }
 }
 
-impl<'a, Scene> RenderScene<'a, Scene> where Scene : SceneSpace<'a> {
+impl<'a, Scene> RenderScene<'a, Scene> where Scene : BoxedTraceSpace<'a> {
 
     fn background(self : &Self, ray : &Ray) -> Colour {
         let white = Rgb([1.0, 1.0, 1.0]);
@@ -126,12 +126,12 @@ impl<'a, Scene> RenderScene<'a, Scene> where Scene : SceneSpace<'a> {
         }
     }
 
-    fn from_json<'geom, 'mat>(
-        input : &JsonValue, 
-        geometry : &'geom Geometries, 
-        materials : &'mat Materials
+    fn from_json<'mat, 'ent>(
+        input : &JsonValue,
+        materials : &'mat Materials,
+        entities : &'ent Vec<Entity<'a>>
     ) -> std::io::Result<RenderScene<'a, Scene>>
-    where 'geom : 'a, 'mat : 'a
+    where 'mat : 'a, 'ent : 'a
     {
         let res_x = input["resolution_x"].as_usize().unwrap_or(1024);
         let res_y = input["resolution_y"].as_usize().unwrap_or(1024);
@@ -140,11 +140,10 @@ impl<'a, Scene> RenderScene<'a, Scene> where Scene : SceneSpace<'a> {
         let camera = Camera::from_json(&input["camera"]).ok_or(
             Error::new(ErrorKind::InvalidData, "Missing camera")
         )?;
-        let entities = input["entities"].members().filter_map(
-            |value| Entity::from_json(value, geometry, materials) 
+        let scene = Scene::from_iter(
+            entities.iter().map(|entity| (entity.bound(), entity))
         );
-        let scene = Scene::from_iter(entities);
-        println!("Scene has {} entities", scene.size());
+        println!("Scene has {} entities", entities.len());
         Ok(RenderScene {
             camera,
             resolution : (res_x, res_y),
@@ -192,6 +191,9 @@ pub fn generate(input : &JsonValue) -> std::io::Result<RgbImage> {
     println!("Generating ray trace scene");
     let materials = Materials::from_json(input);
     let geometries = Geometries::from_json(input);
-    let scene: RenderScene<LinearScene> = RenderScene::from_json(input, &geometries, &materials)?;
+    let entities = input["entities"].members().filter_map(
+        |value| Entity::from_json(value, &geometries, &materials)
+    ).collect();
+    let scene: RenderScene<BSPTreeScene> = RenderScene::from_json(input, &materials, &entities)?;
     Ok(scene.make_image())
 }

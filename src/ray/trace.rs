@@ -1,8 +1,9 @@
+use std::cmp::min;
 use cgmath::{Matrix4, Point3, vec3, vec4, Vector3};
 use cgmath::{prelude::*};
 use json::JsonValue;
 // Scene definitions made faster to scan
-use crate::ray::geometry::{Ray, TraceGeometry, Geometries};
+use crate::ray::geometry::{Ray, TraceGeometry, Geometries, AABox};
 use crate::ray::materials::{Materials, Material, ScatterRay};
 
 // Helper to remember which we want to always be pre-unitized
@@ -23,42 +24,196 @@ pub struct Contact<'a> {
     pub(crate) material : &'a dyn Material
 }
 
-pub trait SceneSpace<'a> {
+pub trait BoxedTraceSpace<'a> {
     fn find_best_contact(self : &Self, ray : &Ray) -> Option<Contact>;
 
-    fn from_iter<I>(entity_iter : I) -> Self
-        where I : Iterator<Item = Entity<'a>>;
+    fn from_iter<I>(boxed_entities : I) -> Self
+        where I : Iterator<Item = (Option<AABox>, &'a Entity<'a>)>;
 
-    fn size(&self) -> usize;
+    fn bound(self : &Self) -> Option<AABox>;
 }
 
-// Very basic scene that stores a list of all the entities
+// Very basic scene that stores a list of all the boxed entities
 pub struct LinearScene<'a> {
-    entities : Vec<Entity<'a>>
+    entities : Vec<(Option<AABox>, &'a Entity<'a>)>
 }
 
-impl<'a> SceneSpace<'a> for LinearScene<'a> {
+#[derive(Clone, Copy)]
+enum Coord {
+    X, Y, Z
+}
+
+pub struct BSPTreeScene<'a> {
+    bound : Option<AABox>,
+    unsplit : LinearScene<'a>,
+    split : Option<(Coord, Box<BSPTreeScene<'a>>, Box<BSPTreeScene<'a>>)>
+}
+
+
+
+impl<'a> BoxedTraceSpace<'a> for LinearScene<'a> {
     fn find_best_contact(self : &Self, ray : &Ray) -> Option<Contact> {
         self.entities.iter().filter_map(
-            |entity| entity.trace(ray)
+            |(_,entity)| entity.trace(ray)
         ).min_by(
             |contact1, contact2| contact1.distance.partial_cmp(&contact2.distance).unwrap()
         )
     }
 
-    fn from_iter<I>(entity_iter : I) -> Self
-        where I : Iterator<Item = Entity<'a>>
-    {
-        LinearScene {
-            entities : entity_iter.collect()
-        }
+    fn from_iter<I>(boxed_entities : I) -> Self
+        where I : Iterator<Item = (Option<AABox>, &'a Entity<'a>)> {
+        LinearScene{ entities : boxed_entities.collect() }
     }
 
-    fn size(&self) -> usize {
-        self.entities.len()
+    fn bound(self: &Self) -> Option<AABox> {
+        let mut aabox_total_opt : Option<AABox> = None;
+        for (aabox_opt,_) in self.entities.iter() {
+            if let Some(aabox) = aabox_opt {
+                aabox_total_opt = if let Some(aabox_total) = &mut aabox_total_opt {
+                    Some(aabox_total.merge(aabox))
+                } else {
+                    Some(aabox.clone())
+                }
+            }
+        }
+        aabox_total_opt
     }
 }
 
+fn best_contact<'a>(contact1_opt : Option<Contact<'a>>, contact2_opt : Option<Contact<'a>>) -> Option<Contact<'a>> {
+    if let Some(contact1) = &contact1_opt {
+        if let Some(contact2) = &contact2_opt {
+            if contact1.distance < contact2.distance {
+                contact1_opt
+            } else {
+                contact2_opt
+            }
+        } else {
+            contact1_opt
+        }
+    } else {
+        contact2_opt
+    }
+}
+
+impl<'a> BoxedTraceSpace<'a> for BSPTreeScene<'a> {
+    fn find_best_contact(self: &Self, ray: &Ray) -> Option<Contact> {
+        // TODO: Make efficient
+        let unsplit_contact = self.unsplit.find_best_contact(ray);
+        let split_contact = if let Some((_, left, right)) = &self.split {
+            let left_contact = left.find_best_contact(ray);
+            let right_contact = right.find_best_contact(ray);
+            best_contact(left_contact, right_contact)
+        } else {
+            None
+        };
+        best_contact(unsplit_contact, split_contact)
+    }
+
+    fn from_iter<I>(boxed_entities: I) -> Self where I: Iterator<Item=(Option<AABox>, &'a Entity<'a>)> {
+        let unsplit = LinearScene::from_iter(boxed_entities);
+        let bound = unsplit.bound();
+        let mut tree = BSPTreeScene { bound, unsplit, split : None};
+        tree.split();
+        tree
+    }
+
+    fn bound(self: &Self) -> Option<AABox> {
+        self.bound.clone()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Split {
+    Unsplit,
+    Left,
+    Right
+}
+
+fn split_state_dir(world_mid : f64, box_min : f64, box_max : f64) -> Split {
+  if box_min > world_mid {
+      Split::Right
+  } else if box_max < world_mid {
+      Split::Left
+  } else {
+      Split::Unsplit
+  }
+}
+
+fn split_state(world : &AABox, dir : Coord, aabox_opt : &Option<AABox>) -> Split{
+    if let Some(aabox) = aabox_opt {
+        match dir {
+            Coord::X => split_state_dir(0.5*(world.min.x + world.max.x), aabox.min.x, aabox.max.x),
+            Coord::Y => split_state_dir(0.5*(world.min.y + world.max.y), aabox.min.y, aabox.max.y),
+            Coord::Z => split_state_dir(0.5*(world.min.z + world.max.z), aabox.min.z, aabox.max.z)
+        }
+    } else {
+        Split::Unsplit
+    }
+}
+
+impl<'a> BSPTreeScene<'a> {
+    fn split(self : &mut Self) {
+        if let Some(bound) = &self.bound {
+            let dir_opt = self.unsplit.split_dir();
+            if let Some(dir) = dir_opt {
+                let mut unsplit = LinearScene{ entities : Vec::new() };
+                let mut left = Vec::new();
+                let mut right = Vec::new();
+                for (aabox, entity) in &self.unsplit.entities {
+                    match split_state(bound, dir, &aabox) {
+                        Split::Unsplit => unsplit.entities.push((aabox.clone(), entity)),
+                        Split::Left => left.push((aabox.clone(), *entity)),
+                        Split::Right => right.push((aabox.clone(), *entity)),
+                    }
+                }
+                self.unsplit = unsplit;
+                self.split = Some((
+                    dir,
+                    Box::new(BSPTreeScene::from_iter(left.into_iter())),
+                    Box::new(BSPTreeScene::from_iter(right.into_iter()))
+                ));
+            }
+        }
+    }
+
+}
+
+impl <'a> LinearScene<'a> {
+    fn split_dir(self : &Self) -> Option<Coord> {
+        let world_opt = self.bound();
+        if let Some(world) = world_opt {
+            let x_stats = self.split_stats(Coord::X, &world);
+            let y_stats = self.split_stats(Coord::Y, &world);
+            let z_stats = self.split_stats(Coord::Z, &world);
+            // Find the best and return if greater than 0
+            if x_stats > y_stats && x_stats > z_stats && x_stats > 0 {
+                Some(Coord::X)
+            } else if y_stats > x_stats && y_stats > z_stats && y_stats > 0 {
+                Some(Coord::Y)
+            } else if z_stats > x_stats && z_stats > y_stats && z_stats > 0 {
+                Some(Coord::Z)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    fn split_stats(self : &Self, dir : Coord, world : &AABox) -> usize {
+        let mut left : usize = 0;
+        let mut right : usize = 0;
+        for (aabox, _) in self.entities.iter() {
+            match split_state(world, dir, &aabox) {
+                Split::Unsplit => (),
+                Split::Left => left+=1,
+                Split::Right => right+=1,
+            }
+        }
+        min(left, right)
+    }
+}
 
 impl<'a> Entity<'a> {
     pub(crate) fn from_json(
@@ -91,6 +246,10 @@ impl<'a> Entity<'a> {
         };
         let inv = to_world.invert().unwrap();
         Some(Entity { geometry: geometry, to_local: inv, to_world: to_world, material: material })
+    }
+
+    pub fn bound(&self) -> Option<AABox> {
+        self.geometry.bound(&self.to_world)
     }
 
     fn trace(&self, ray : &Ray) -> Option<Contact<'a>> {

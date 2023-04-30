@@ -56,6 +56,7 @@ struct OriginBox {
 }
 
 // A axis aligned box to bound geomenty
+#[derive(Clone)]
 pub struct AABox {
     pub min : Point3<f64>,
     pub max : Point3<f64>
@@ -318,7 +319,7 @@ impl AABox {
         } else {
             None
         }
-    } 
+    }
 
     fn merge_pt(&self, pt : Point3<f64>) -> AABox {
         AABox { 
