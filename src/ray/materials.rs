@@ -46,7 +46,7 @@ pub struct Shiny {
 }
 
 pub struct Dull {
-    colour : Rgb<f64>
+    pub(crate) colour : Rgb<f64>
 }
 
 pub struct Checker {

@@ -12,6 +12,11 @@ use json::JsonValue;
 
 use crate::ray::geometry2::{Ray2, Circle, OriginSquare, TraceGeometry2};
 
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub enum Coord {
+    X, Y, Z
+}
+
 // Helper to remember which we want to always be pre-unitized
 type UnitVector3 = Vector3<f64>;
 
@@ -63,8 +68,8 @@ pub struct AABox {
 }
 
 // Sphere at the origin of a given radius
-struct Sphere {
-    radius : f64
+pub struct Sphere {
+    pub radius : f64
 }
   
 // Z plane at the origin
@@ -111,6 +116,31 @@ impl TraceGeometry for Sphere {
         let origin = mat.transform_point(point3(0.0, 0.0, 0.0));
         let diff = vec3(self.radius, self.radius, self.radius);
         Some(AABox { min: origin - diff, max: origin + diff })
+    }
+}
+
+impl TraceGeometry for AABox {
+    fn trace(&self, ray : &Ray) -> Option<(f64, UnitVector3)> {
+        // Note temp object makes this slower than needed only used for some bound checks
+        // Atm if needed faster impl proper
+        let center = self.center();
+        let x_half = self.max.x - center.x;
+        let y_half = self.max.y - center.y;
+        let square = OriginSquare{ x_half, y_half };
+        let z_half = self.max.z - center.z;
+        let prism = Prism {
+            base: square,
+            half_length: z_half,
+        };
+        let origin_box = OriginBox{ prism };
+        let translate_ray = Ray { direction: ray.direction, start: ray.start - center.to_vec() };
+        origin_box.trace(&translate_ray)
+    }
+
+    fn bound(&self, mat : &Matrix4<f64>) -> Option<AABox> {
+        AABox::from_points(self.vertices().into_iter().map(
+            |pt| mat.transform_point(pt)
+        ))
     }
 }
 
@@ -349,6 +379,75 @@ impl AABox {
                 max_d(self.max.z, other.max.z)
             ), 
         }
+    }
+
+    pub fn center(&self) -> Point3<f64> {
+        point3(
+            0.5*(self.min.x + self.max.x),
+            0.5*(self.min.y + self.max.y),
+            0.5*(self.min.z + self.max.z)
+        )
+    }
+
+    pub fn contains(&self, pt : &Point3<f64>) -> bool {
+        self.contains_coord(pt, Coord::X)
+        && self.contains_coord(pt, Coord::Y)
+        && self.contains_coord(pt, Coord::Z)
+    }
+
+    fn contains_coord(&self, pt : &Point3<f64>, coord : Coord) -> bool {
+        match coord {
+            Coord::X => self.min.x < pt.x && self.max.x >= pt.x,
+            Coord::Y => self.min.y < pt.y && self.max.y >= pt.y,
+            Coord::Z => self.min.z < pt.z && self.max.z >= pt.z,
+        }
+    }
+
+    pub fn contains_eps(&self, pt : &Point3<f64>, eps : f64) -> bool {
+        self.contains_coord_eps(pt, Coord::X, eps)
+            && self.contains_coord_eps(pt, Coord::Y, eps)
+            && self.contains_coord_eps(pt, Coord::Z, eps)
+    }
+
+    fn contains_coord_eps(&self, pt : &Point3<f64>, coord : Coord, eps : f64) -> bool {
+        match coord {
+            Coord::X => self.min.x - eps < pt.x && self.max.x + eps >= pt.x,
+            Coord::Y => self.min.y - eps < pt.y && self.max.y + eps >= pt.y,
+            Coord::Z => self.min.z - eps < pt.z && self.max.z + eps >= pt.z,
+        }
+    }
+
+    fn vertices(&self) -> [Point3<f64>; 8] {
+        [
+            point3(self.min.x,self.min.y,self.min.z),
+            point3(self.min.x,self.min.y,self.max.z),
+            point3(self.min.x,self.max.y,self.min.z),
+            point3(self.min.x,self.max.y,self.max.z),
+            point3(self.max.x,self.min.y,self.min.z),
+            point3(self.max.x,self.min.y,self.max.z),
+            point3(self.max.x,self.max.y,self.min.z),
+            point3(self.max.x,self.max.y,self.max.z)
+        ]
+    }
+
+    pub(crate) fn cut_left(&self, coord : Coord) -> AABox {
+        let mut new_max = self.max;
+        match coord {
+            Coord::X => new_max.x = (self.max.x + self.min.x) * 0.5,
+            Coord::Y => new_max.y = (self.max.y + self.min.y) * 0.5,
+            Coord::Z => new_max.z = (self.max.z + self.min.z) * 0.5
+        };
+        AABox{ min: self.min, max : new_max}
+    }
+
+    pub(crate) fn cut_right(&self, coord : Coord) -> AABox {
+        let mut new_min = self.min;
+        match coord {
+            Coord::X => new_min.x = (self.max.x + self.min.x) * 0.5,
+            Coord::Y => new_min.y = (self.max.y + self.min.y) * 0.5,
+            Coord::Z => new_min.z = (self.max.z + self.min.z) * 0.5
+        };
+        AABox{ min: new_min, max : self.max}
     }
 }
 
@@ -615,6 +714,19 @@ mod tests {
         // Hit
         assert!(trace.is_none());
     }
+
+    #[test]
+    fn test_trace_aabox_axis_hit() {
+        let cube = AABox { min : point3(0.0, -1.0, 1.0) , max : point3(1.0, 0.0, 2.0)};
+        // Fire along axis and hit
+        let trace = cube.trace(&
+            Ray {start : point3(-10.0,-0.5,1.5), direction : vec3(1.0,0.0,0.0)}
+        );
+        // Miss
+        assert!(trace.is_some());
+        assert_abs_diff_eq!(trace.unwrap().0, 10.0);
+    }
+
 
 
 }

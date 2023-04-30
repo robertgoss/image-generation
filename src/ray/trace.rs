@@ -3,7 +3,7 @@ use cgmath::{Matrix4, Point3, vec3, vec4, Vector3};
 use cgmath::{prelude::*};
 use json::JsonValue;
 // Scene definitions made faster to scan
-use crate::ray::geometry::{Ray, TraceGeometry, Geometries, AABox};
+use crate::ray::geometry::{Ray, TraceGeometry, Geometries, AABox, Coord};
 use crate::ray::materials::{Materials, Material, ScatterRay};
 
 // Helper to remember which we want to always be pre-unitized
@@ -38,17 +38,18 @@ pub struct LinearScene<'a> {
     entities : Vec<(Option<AABox>, &'a Entity<'a>)>
 }
 
-#[derive(Clone, Copy)]
-enum Coord {
-    X, Y, Z
-}
-
 pub struct BSPTreeScene<'a> {
-    bound : Option<AABox>,
-    unsplit : LinearScene<'a>,
-    split : Option<(Coord, Box<BSPTreeScene<'a>>, Box<BSPTreeScene<'a>>)>
+    tree : BSPTree<'a>,
+    unbounded : LinearScene<'a>,
+    tree_bound : Option<AABox>
 }
 
+pub struct BSPTree<'a> {
+    cut : f64,
+    bound : AABox,
+    unsplit : LinearScene<'a>,
+    split : Option<(Coord, Box<BSPTree<'a>>, Box<BSPTree<'a>>)>
+}
 
 
 impl<'a> BoxedTraceSpace<'a> for LinearScene<'a> {
@@ -74,6 +75,8 @@ impl<'a> BoxedTraceSpace<'a> for LinearScene<'a> {
                 } else {
                     Some(aabox.clone())
                 }
+            } else {
+                return None
             }
         }
         aabox_total_opt
@@ -98,28 +101,53 @@ fn best_contact<'a>(contact1_opt : Option<Contact<'a>>, contact2_opt : Option<Co
 
 impl<'a> BoxedTraceSpace<'a> for BSPTreeScene<'a> {
     fn find_best_contact(self: &Self, ray: &Ray) -> Option<Contact> {
-        // TODO: Make efficient
-        let unsplit_contact = self.unsplit.find_best_contact(ray);
-        let split_contact = if let Some((_, left, right)) = &self.split {
-            let left_contact = left.find_best_contact(ray);
-            let right_contact = right.find_best_contact(ray);
-            best_contact(left_contact, right_contact)
-        } else {
-            None
-        };
-        best_contact(unsplit_contact, split_contact)
+        let unbounded_contact = self.unbounded.find_best_contact(ray);
+        // Get to box if ray start not inside
+        if let Some(bound) = &self.tree_bound {
+            if bound.contains(&ray.start) {
+                let tree_contact = self.tree.find_best_contact(ray);
+                return best_contact(unbounded_contact, tree_contact)
+            }
+            if let Some((t_box, _)) = bound.trace(ray) {
+                let proj_ray = Ray { direction : ray.direction, start : ray.at(t_box)};
+                assert!(bound.contains_eps(&proj_ray.start, 1e-6));
+                let tree_contact = self.tree.find_best_contact(&proj_ray).map(
+                    |contact| contact.push_back(t_box)
+                );
+                return best_contact(unbounded_contact, tree_contact)
+            }
+        }
+        unbounded_contact
     }
 
     fn from_iter<I>(boxed_entities: I) -> Self where I: Iterator<Item=(Option<AABox>, &'a Entity<'a>)> {
-        let unsplit = LinearScene::from_iter(boxed_entities);
-        let bound = unsplit.bound();
-        let mut tree = BSPTreeScene { bound, unsplit, split : None};
-        tree.split();
-        tree
+        let mut unbounded = LinearScene { entities : Vec::new() };
+        let mut unsplit_boxed = LinearScene { entities : Vec::new() };
+        for (aabox_opt, entity) in boxed_entities {
+            if aabox_opt. is_some(){
+                unsplit_boxed.entities.push((aabox_opt, entity));
+            } else {
+                unbounded.entities.push((aabox_opt, entity));
+            }
+        };
+        let tree_bound = unsplit_boxed.bound();
+        let mut tree = BSPTree { cut : 0.0, bound : tree_bound.clone().unwrap(), unsplit : unsplit_boxed, split : None};
+        if let Some(tree_bound_val) = tree_bound.as_ref() {
+            tree.split(tree_bound_val);
+        }
+        BSPTreeScene {
+            tree,
+            unbounded,
+            tree_bound
+        }
     }
 
     fn bound(self: &Self) -> Option<AABox> {
-        self.bound.clone()
+        if self.unbounded.entities.is_empty() {
+            self.tree_bound.clone()
+        } else {
+            None
+        }
     }
 }
 
@@ -143,37 +171,119 @@ fn split_state_dir(world_mid : f64, box_min : f64, box_max : f64) -> Split {
 fn split_state(world : &AABox, dir : Coord, aabox_opt : &Option<AABox>) -> Split{
     if let Some(aabox) = aabox_opt {
         match dir {
-            Coord::X => split_state_dir(0.5*(world.min.x + world.max.x), aabox.min.x, aabox.max.x),
-            Coord::Y => split_state_dir(0.5*(world.min.y + world.max.y), aabox.min.y, aabox.max.y),
-            Coord::Z => split_state_dir(0.5*(world.min.z + world.max.z), aabox.min.z, aabox.max.z)
+            Coord::X => split_state_dir(0.5 * (world.min.x + world.max.x), aabox.min.x, aabox.max.x),
+            Coord::Y => split_state_dir(0.5 * (world.min.y + world.max.y), aabox.min.y, aabox.max.y),
+            Coord::Z => split_state_dir(0.5 * (world.min.z + world.max.z), aabox.min.z, aabox.max.z)
         }
     } else {
         Split::Unsplit
     }
 }
 
-impl<'a> BSPTreeScene<'a> {
-    fn split(self : &mut Self) {
-        if let Some(bound) = &self.bound {
-            let dir_opt = self.unsplit.split_dir();
-            if let Some(dir) = dir_opt {
-                let mut unsplit = LinearScene{ entities : Vec::new() };
-                let mut left = Vec::new();
-                let mut right = Vec::new();
-                for (aabox, entity) in &self.unsplit.entities {
-                    match split_state(bound, dir, &aabox) {
-                        Split::Unsplit => unsplit.entities.push((aabox.clone(), entity)),
-                        Split::Left => left.push((aabox.clone(), *entity)),
-                        Split::Right => right.push((aabox.clone(), *entity)),
-                    }
+fn vec_coord(dir : Coord, vec : &UnitVector3) -> f64 {
+    match dir {
+        Coord::X => vec.x,
+        Coord::Y => vec.y,
+        Coord::Z => vec.z
+    }
+}
+
+fn point_coord(dir : Coord, pt : &Point3<f64>) -> f64 {
+    match dir {
+        Coord::X => pt.x,
+        Coord::Y => pt.y,
+        Coord::Z => pt.z
+    }
+}
+
+impl<'a> BSPTree<'a> {
+    fn split(self : &mut Self, bound : &AABox) {
+        let dir_opt = self.unsplit.split_dir();
+        if let Some(dir) = dir_opt {
+            let mut unsplit = LinearScene { entities: Vec::new() };
+            let mut left = Vec::new();
+            let mut right = Vec::new();
+            for (aabox, entity) in &self.unsplit.entities {
+                match split_state(bound, dir, &aabox) {
+                    Split::Unsplit => unsplit.entities.push((aabox.clone(), entity)),
+                    Split::Left => left.push((aabox.clone(), *entity)),
+                    Split::Right => right.push((aabox.clone(), *entity)),
                 }
-                self.unsplit = unsplit;
-                self.split = Some((
-                    dir,
-                    Box::new(BSPTreeScene::from_iter(left.into_iter())),
-                    Box::new(BSPTreeScene::from_iter(right.into_iter()))
-                ));
             }
+            self.unsplit = unsplit;
+            self.cut = point_coord(dir, &bound.center());
+            self.split = Some((
+                dir,
+                Box::new(BSPTree::from_iter(bound.cut_left(dir), left.into_iter())),
+                Box::new(BSPTree::from_iter(bound.cut_right(dir), right.into_iter()))
+            ));
+        }
+    }
+
+    fn from_iter<I>(bound : AABox, boxed_entities: I) -> Self where I: Iterator<Item=(Option<AABox>, &'a Entity<'a>)> {
+        let unsplit = LinearScene::from_iter(
+            boxed_entities.filter(|(aabox, _)| aabox.is_some())
+        );
+        let mut tree = BSPTree { cut : 0.0, bound : bound.clone(), unsplit, split : None};
+        tree.split(&bound);
+        tree
+    }
+
+    fn split_ray(self : &Self, ray : &Ray) -> Option<(f64, Ray)> {
+        let coord = self.split.as_ref().unwrap().0;
+        let ray_dir = vec_coord(coord, &ray.direction);
+        let ray_pos = point_coord(coord, &ray.start);
+        if ray_dir.abs() < 1e-10 {
+            return None
+        };
+        let t = (self.cut - ray_pos) / ray_dir;
+        if t < 0.0 {
+            return None;
+        }
+        let cross = ray.at(t);
+        if self.bound.contains(&cross) {
+            Some((t, Ray { start : cross, direction : ray.direction }))
+        } else {
+            None
+        }
+    }
+
+    fn find_best_contact(self: &Self, ray: &Ray) -> Option<Contact> {
+        assert!(self.bound.contains_eps(&ray.start, 1e-6));
+        let unsplit_contact = self.unsplit.find_best_contact(ray);
+        let split_contact = self.find_best_contact_split(ray);
+        best_contact(unsplit_contact, split_contact)
+    }
+
+    fn find_best_contact_split(self: &Self, ray: &Ray) -> Option<Contact> {
+        assert!(self.bound.contains_eps(&ray.start, 1e-6));
+        if let Some((coord, left, right)) = &self.split {
+            let left_right = vec_coord(*coord, &ray.direction) > 0.0;
+            let ray_pos = point_coord(*coord, &ray.start);
+            let initial_cont = if left_right {
+                if ray_pos > self.cut {
+                    return right.find_best_contact(ray);
+                }
+                left.find_best_contact(ray)
+            } else {
+                if ray_pos < self.cut {
+                    return left.find_best_contact(ray);
+                }
+                right.find_best_contact(ray)
+            };
+            let second_cont = self.split_ray(ray).and_then(
+                |(t, split_ray)| {
+                    let contact_opt= if left_right {
+                        right.find_best_contact(&split_ray)
+                    } else {
+                        left.find_best_contact(&split_ray)
+                    };
+                    contact_opt.map(|contact| contact.push_back(t))
+                }
+            );
+            best_contact(initial_cont, second_cont)
+        } else {
+            None
         }
     }
 
@@ -259,7 +369,7 @@ impl<'a> Entity<'a> {
         Some(Contact {
             pos : ray.at(t_contact),
             local_pos: transformed_ray.at(t_contact),
-            normal: normal,
+            normal,
             distance: t_contact,
             material: self.material
         })
@@ -282,6 +392,16 @@ impl<'a> Contact<'a> {
         Ray{start: self.pos + dir * 0.0001, direction : dir}
     }
 
+    fn push_back(self: &Self, t : f64) -> Contact<'a> {
+        Contact {
+            pos : self.pos,
+            local_pos : self.local_pos,
+            normal : self.normal,
+            distance : t + self.distance,
+            material : self.material
+        }
+    }
+
     pub(crate) fn scatter_ray<Rng>(self : &Self, scatter : &ScatterRay, rng : &mut Rng, ray_in : &Ray) -> Option<Ray>
         where Rng : rand::Rng
     {
@@ -290,5 +410,47 @@ impl<'a> Contact<'a> {
             ScatterRay::Diffuse => Some(self.diffuse_ray(rng)),
             ScatterRay::Reflection => Some(self.reflection_ray(ray_in))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cgmath::{assert_abs_diff_eq, point3};
+    use image::Rgb;
+    use crate::ray::geometry;
+    use crate::ray::geometry::Sphere;
+    use crate::ray::materials::Dull;
+
+    use super::*;
+
+    #[test]
+    fn test_bsp_split_3_spheres() {
+        // Given a scene with 3 spheres in a line the bsp should split into 2 children with one
+        // in each
+        let sphere = Sphere { radius : 1.0 };
+        let mat = Dull { colour: Rgb([0.0,0.0,0.0]) };
+        let mut entities: Vec<Entity> = vec!(
+            Entity {
+                geometry: &sphere,
+                to_local: Matrix4::from_translation(vec3(-10.0, 0.0, 0.0)),
+                to_world: Matrix4::from_translation(vec3(10.0, 0.0, 0.0)),
+                material: &mat,
+            },
+            Entity {
+                geometry: &sphere,
+                to_local: Matrix4::from_translation(vec3(0.0, 0.0, 0.0)),
+                to_world: Matrix4::from_translation(vec3(0.0, 0.0, 0.0)),
+                material: &mat,
+            },
+            Entity {
+                geometry: &sphere,
+                to_local: Matrix4::from_translation(vec3(10.0, 0.0, 0.0)),
+                to_world: Matrix4::from_translation(vec3(-10.0, 0.0, 0.0)),
+                material: &mat,
+            }
+        );
+        let scene = BSPTreeScene::from_iter(
+            entities.iter().map(|entity| (entity.bound(), entity))
+        );
     }
 }
