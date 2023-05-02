@@ -76,7 +76,7 @@ pub struct Sphere {
 struct Plane;
 
 
-pub trait TraceGeometry {
+pub trait TraceGeometry: std::marker::Sync {
     fn trace(&self, ray : &Ray) -> Option<(f64, UnitVector3)>;
 
     fn bound(&self, mat : &Matrix4<f64>) -> Option<AABox>; 

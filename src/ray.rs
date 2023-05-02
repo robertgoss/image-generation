@@ -8,9 +8,11 @@ use cgmath::{prelude::*, Matrix3};
 use cgmath::{point3, vec3, Point3};
 
 use json::JsonValue;
-use image::{Rgb, RgbImage};
+use image::{GenericImage, Rgb, RgbImage};
 
 use rand::{Rng, SeedableRng};
+
+use rayon::prelude::*;
 
 mod geometry;
 mod geometry2;
@@ -94,7 +96,7 @@ impl Camera {
     }
 }
 
-impl<'a, Scene> RenderScene<'a, Scene> where Scene : BoxedTraceSpace<'a> {
+impl<'a, Scene> RenderScene<'a, Scene> where Scene : BoxedTraceSpace<'a> + std::marker::Sync {
 
     fn background(self : &Self, ray : &Ray) -> Colour {
         let white = Rgb([1.0, 1.0, 1.0]);
@@ -154,35 +156,44 @@ impl<'a, Scene> RenderScene<'a, Scene> where Scene : BoxedTraceSpace<'a> {
         })
     }
 
-    fn make_image(&self) -> RgbImage {
-        let mut img = RgbImage::new(
-            self.resolution.0 as u32, 
-            self.resolution.1 as u32
-        );
+    fn make_row(&self, i : usize) -> Vec<Rgb<u8>> {
+        let mut pixels: Vec<Rgb<u8>> = Vec::with_capacity(self.resolution.1);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
         let x_res = self.resolution.0 as f64;
         let y_res = self.resolution.1 as f64;
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
-        for i in 0..self.resolution.0 {
-            println!("Line: {}", i);
-            for j in 0..self.resolution.0 {
-                let mut accumulated_colour = Rgb([0.0, 0.0, 0.0]);
-                for _ in 0..self.antialiasing_samples {
-                    let ai = i as f64 + rng.gen::<f64>() - 0.5;
-                    let aj = j as f64 + rng.gen::<f64>() - 0.5;
-                    let x = 1.0 - (ai / x_res);
-                    let y = 1.0 - (aj / y_res);
-                    let ray = self.camera.ray(x, y);
-                    let colour = self.trace_ray(&mut rng, &ray, self.max_depth);
-                    rgb_sum(&mut accumulated_colour, &colour);
-                }
-                let sample_scale = 1.0 / self.antialiasing_samples as f64;
-                let r = (accumulated_colour.0[0] * 255.0 * sample_scale) as u8;
-                let g = (accumulated_colour.0[1] * 255.0 * sample_scale) as u8;
-                let b = (accumulated_colour.0[2] * 255.0 * sample_scale) as u8;
-                img.put_pixel(i as u32, j as u32,Rgb([r,g,b]));
+        for j in 0..self.resolution.0 {
+            let mut accumulated_colour = Rgb([0.0, 0.0, 0.0]);
+            for _ in 0..self.antialiasing_samples {
+                let ai = i as f64 + rng.gen::<f64>() - 0.5;
+                let aj = j as f64 + rng.gen::<f64>() - 0.5;
+                let x = 1.0 - (ai / x_res);
+                let y = 1.0 - (aj / y_res);
+                let ray = self.camera.ray(x, y);
+                let colour = self.trace_ray(&mut rng, &ray, self.max_depth);
+                rgb_sum(&mut accumulated_colour, &colour);
+            }
+            let sample_scale = 1.0 / self.antialiasing_samples as f64;
+            let r = (accumulated_colour.0[0] * 255.0 * sample_scale) as u8;
+            let g = (accumulated_colour.0[1] * 255.0 * sample_scale) as u8;
+            let b = (accumulated_colour.0[2] * 255.0 * sample_scale) as u8;
+            pixels.push(Rgb([r,g,b]));
+        }
+        pixels
+    }
+
+    fn make_image(&self) -> RgbImage {
+        let pixels : Vec<Vec<Rgb<u8>>> = (0..self.resolution.1).into_par_iter().map(
+            |j| self.make_row(j)
+        ).collect();
+        let mut img = RgbImage::new(
+            self.resolution.0 as u32,
+            self.resolution.1 as u32
+        );
+        for (i, row) in pixels.into_iter().enumerate() {
+            for (j, pixel) in row.into_iter().enumerate() {
+                img.put_pixel(i as u32, j as u32, pixel);
             }
         }
-
         img
     }
 }

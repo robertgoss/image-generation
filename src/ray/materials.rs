@@ -110,7 +110,7 @@ pub enum ScatterRay {
     Reflection
 }
 
-pub trait Material {
+pub trait Material: std::marker::Sync {
     fn colour(
         &self, 
         mats : &Materials,

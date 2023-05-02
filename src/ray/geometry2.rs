@@ -29,7 +29,7 @@ pub struct OriginSquare {
     pub y_half : f64
 }
 
-pub trait TraceGeometry2 {
+pub trait TraceGeometry2: std::marker::Sync {
     fn trace(&self, ray : &Ray2) -> Option<(f64, UnitVector2)>;
     fn inside(&self, point : &Point2<f64>) -> bool;
 }
