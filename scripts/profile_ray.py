@@ -13,14 +13,16 @@ def time_res(num_spheres):
         "number": num_spheres,
         "seed": 0
     }
-    with open("input.json", "w") as file:
-        file.write(json.dumps(data))
+    with open("input.json", "w") as temp_file:
+        temp_file.write(json.dumps(data))
     time_start = time.time()
     subprocess.run(["target/release/image-generation", "input.json"], capture_output=True, check=True)
     time_end = time.time()
     return time_end - time_start
 
 
-for i in range(0, 120, 10):
-    t = time_res(i)
-    print("{}: {}".format(i, t))
+with open("profile_ray.txt", "w") as out_file:
+    for i in range(0, 120, 5):
+        t = time_res(i)
+        print("{} out of {}".format(i, 120))
+        out_file.write("{}: {}\n".format(i, t))
