@@ -20,7 +20,7 @@ mod trace;
 use geometry::{Ray, Geometries};
 use materials::{Materials, rgb_lerp, rgb_scale};
 use crate::ray::materials::rgb_sum;
-use crate::ray::trace::{Contact, Entity, BSPTreeScene, BoxedTraceSpace};
+use crate::ray::trace::{Contact, Entity, BSPTreeScene, BoxedTraceSpace, LinearScene, BSPTree};
 
 // Helper to remember which we want to always be pre-unitized
 type Colour = Rgb<f64>;
