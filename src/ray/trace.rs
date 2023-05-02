@@ -39,9 +39,8 @@ pub struct LinearScene<'a> {
 }
 
 pub struct BSPTreeScene<'a> {
-    tree : BSPTree<'a>,
-    unbounded : LinearScene<'a>,
-    tree_bound : Option<AABox>
+    bounded_tree : Option<(AABox, BSPTree<'a>)>,
+    unbounded : LinearScene<'a>
 }
 
 pub struct BSPTree<'a> {
@@ -103,15 +102,15 @@ impl<'a> BoxedTraceSpace<'a> for BSPTreeScene<'a> {
     fn find_best_contact(self: &Self, ray: &Ray) -> Option<Contact> {
         let unbounded_contact = self.unbounded.find_best_contact(ray);
         // Get to box if ray start not inside
-        if let Some(bound) = &self.tree_bound {
+        if let Some((bound, tree)) = &self.bounded_tree {
             if bound.contains(&ray.start) {
-                let tree_contact = self.tree.find_best_contact(ray);
+                let tree_contact = tree.find_best_contact(ray);
                 return best_contact(unbounded_contact, tree_contact)
             }
             if let Some((t_box, _)) = bound.trace(ray) {
                 let proj_ray = Ray { direction : ray.direction, start : ray.at(t_box)};
                 assert!(bound.contains_eps(&proj_ray.start, 1e-6));
-                let tree_contact = self.tree.find_best_contact(&proj_ray).map(
+                let tree_contact = tree.find_best_contact(&proj_ray).map(
                     |contact| contact.push_back(t_box)
                 );
                 return best_contact(unbounded_contact, tree_contact)
@@ -131,20 +130,24 @@ impl<'a> BoxedTraceSpace<'a> for BSPTreeScene<'a> {
             }
         };
         let tree_bound = unsplit_boxed.bound();
-        let mut tree = BSPTree { cut : 0.0, bound : tree_bound.clone().unwrap(), unsplit : unsplit_boxed, split : None};
-        if let Some(tree_bound_val) = tree_bound.as_ref() {
-            tree.split(tree_bound_val);
-        }
+        let bounded_tree = tree_bound.map(
+            |bound| {
+                let mut tree = BSPTree { cut : 0.0, bound : bound.clone(), unsplit : unsplit_boxed, split : None};
+                tree.split(&bound);
+                (bound, tree)
+            }
+        );
         BSPTreeScene {
-            tree,
-            unbounded,
-            tree_bound
+            bounded_tree,
+            unbounded
         }
     }
 
     fn bound(self: &Self) -> Option<AABox> {
         if self.unbounded.entities.is_empty() {
-            self.tree_bound.clone()
+            self.bounded_tree.as_ref().map(
+                |(bound, _)| bound.clone()
+            )
         } else {
             None
         }
@@ -297,11 +300,11 @@ impl <'a> LinearScene<'a> {
             let y_stats = self.split_stats(Coord::Y, &world);
             let z_stats = self.split_stats(Coord::Z, &world);
             // Find the best and return if greater than 0
-            if x_stats > y_stats && x_stats > z_stats && x_stats > 0 {
+            if x_stats >= y_stats && x_stats >= z_stats && x_stats > 0 {
                 Some(Coord::X)
-            } else if y_stats > x_stats && y_stats > z_stats && y_stats > 0 {
+            } else if y_stats >= x_stats && y_stats >= z_stats && y_stats > 0 {
                 Some(Coord::Y)
-            } else if z_stats > x_stats && z_stats > y_stats && z_stats > 0 {
+            } else if z_stats >= x_stats && z_stats >= y_stats && z_stats > 0 {
                 Some(Coord::Z)
             } else {
                 None
