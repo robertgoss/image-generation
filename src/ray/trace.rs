@@ -25,7 +25,7 @@ pub struct Contact<'a> {
 }
 
 pub trait BoxedTraceSpace<'a> {
-    fn find_best_contact(self : &Self, ray : &Ray) -> Option<Contact>;
+    fn find_best_contact(self : &Self, ray : &Ray, bound : &Option<f64>) -> Option<Contact>;
 
     fn from_iter<I>(boxed_entities : I) -> Self
         where I : Iterator<Item = (Option<AABox>, &'a Entity<'a>)>;
@@ -52,7 +52,7 @@ pub struct BSPTree<'a> {
 
 
 impl<'a> BoxedTraceSpace<'a> for LinearScene<'a> {
-    fn find_best_contact(self : &Self, ray : &Ray) -> Option<Contact> {
+    fn find_best_contact(self : &Self, ray : &Ray, _ : &Option<f64>) -> Option<Contact> {
         self.entities.iter().filter_map(
             |(_,entity)| entity.trace(ray)
         ).min_by(
@@ -82,35 +82,63 @@ impl<'a> BoxedTraceSpace<'a> for LinearScene<'a> {
     }
 }
 
-fn best_contact<'a>(contact1_opt : Option<Contact<'a>>, contact2_opt : Option<Contact<'a>>) -> Option<Contact<'a>> {
-    if let Some(contact1) = &contact1_opt {
-        if let Some(contact2) = &contact2_opt {
-            if contact1.distance < contact2.distance {
-                contact1_opt
-            } else {
-                contact2_opt
-            }
+// Is a or b the best bound
+//
+// No distance compare less than a distance
+fn cmp_bound(dist_a_opt : &Option<f64>, dist_b_opt : &Option<f64>) -> bool {
+    if let Some(dist_a) = &dist_a_opt {
+        if let Some(dist_b) = &dist_b_opt {
+            dist_a < dist_b
         } else {
-            contact1_opt
+            true
         }
     } else {
-        contact2_opt
+        false
     }
 }
 
+fn best_bound<'a>(dist_a_opt : Option<f64>, dist_b_opt : Option<f64>) -> Option<f64> {
+    if cmp_bound(&dist_a_opt, &dist_a_opt){
+        dist_a_opt
+    } else {
+        dist_b_opt
+    }
+}
+
+fn best_contact<'a>(contact1_opt : Option<Contact<'a>>, contact2_opt : Option<Contact<'a>>) -> Option<Contact<'a>> {
+    let cmp = cmp_bound(
+        &contact1_opt.as_ref().map(|c| {c.distance}),
+        &contact2_opt.as_ref().map(|c| {c.distance})
+    );
+    if cmp { contact1_opt } else { contact2_opt }
+}
+
 impl<'a> BoxedTraceSpace<'a> for BSPTreeScene<'a> {
-    fn find_best_contact(self: &Self, ray: &Ray) -> Option<Contact> {
-        let unbounded_contact = self.unbounded.find_best_contact(ray);
+    fn find_best_contact(self: &Self, ray: &Ray, initial_dist_bound : &Option<f64>) -> Option<Contact> {
+        let unbounded_contact = self.unbounded.find_best_contact(ray, initial_dist_bound);
+        let dist_bound_opt = best_bound(
+            initial_dist_bound.clone(),
+            unbounded_contact.as_ref().map(|c| c.distance)
+        );
         // Get to box if ray start not inside
         if let Some((bound, tree)) = &self.bounded_tree {
             if bound.contains(&ray.start) {
-                let tree_contact = tree.find_best_contact(ray);
+                let tree_contact = tree.find_best_contact(ray, &dist_bound_opt);
                 return best_contact(unbounded_contact, tree_contact)
             }
             if let Some((t_box, _)) = bound.trace(ray) {
+                let mut proj_dist_bound : Option<f64> = None;
+                if let Some(dist_bound) = dist_bound_opt {
+                    if dist_bound < t_box {
+                        // Cant contact
+                        return unbounded_contact
+                    } else {
+                        proj_dist_bound = Some(dist_bound - t_box);
+                    }
+                }
                 let proj_ray = Ray { direction : ray.direction, start : ray.at(t_box)};
                 assert!(bound.contains_eps(&proj_ray.start, 1e-6));
-                let tree_contact = tree.find_best_contact(&proj_ray).map(
+                let tree_contact = tree.find_best_contact(&proj_ray, &proj_dist_bound).map(
                     |contact| contact.push_back(t_box)
                 );
                 return best_contact(unbounded_contact, tree_contact)
@@ -251,35 +279,46 @@ impl<'a> BSPTree<'a> {
         }
     }
 
-    fn find_best_contact(self: &Self, ray: &Ray) -> Option<Contact> {
+    fn find_best_contact(self: &Self, ray: &Ray, initial_dist_bound : &Option<f64>) -> Option<Contact> {
         assert!(self.bound.contains_eps(&ray.start, 1e-6));
-        let unsplit_contact = self.unsplit.find_best_contact(ray);
-        let split_contact = self.find_best_contact_split(ray);
+        let unsplit_contact = self.unsplit.find_best_contact(ray, initial_dist_bound);
+        let best_dist_bound = best_bound(
+            initial_dist_bound.clone(),
+            unsplit_contact.as_ref().map(|c| c.distance)
+        );
+        let split_contact = self.find_best_contact_split(ray, &best_dist_bound);
         best_contact(unsplit_contact, split_contact)
     }
 
-    fn find_best_contact_split(self: &Self, ray: &Ray) -> Option<Contact> {
+    fn find_best_contact_split(self: &Self, ray: &Ray, initial_dist_bound : &Option<f64>) -> Option<Contact> {
         assert!(self.bound.contains_eps(&ray.start, 1e-6));
         if let Some((coord, left, right)) = &self.split {
             let left_right = vec_coord(*coord, &ray.direction) > 0.0;
             let ray_pos = point_coord(*coord, &ray.start);
             let initial_cont = if left_right {
                 if ray_pos > self.cut {
-                    return right.find_best_contact(ray);
+                    return right.find_best_contact(ray, initial_dist_bound);
                 }
-                left.find_best_contact(ray)
+                left.find_best_contact(ray, initial_dist_bound)
             } else {
                 if ray_pos < self.cut {
-                    return left.find_best_contact(ray);
+                    return left.find_best_contact(ray, initial_dist_bound);
                 }
-                right.find_best_contact(ray)
+                right.find_best_contact(ray, initial_dist_bound)
             };
             let second_cont = self.split_ray(ray).and_then(
                 |(t, split_ray)| {
+                    let mut split_dist_bound : Option<f64> = None;
+                    if let Some(dist_bound) = initial_dist_bound {
+                        if *dist_bound < t {
+                            return None
+                        }
+                        split_dist_bound = Some(dist_bound - t);
+                    }
                     let contact_opt= if left_right {
-                        right.find_best_contact(&split_ray)
+                        right.find_best_contact(&split_ray, &split_dist_bound)
                     } else {
-                        left.find_best_contact(&split_ray)
+                        left.find_best_contact(&split_ray, &split_dist_bound)
                     };
                     contact_opt.map(|contact| contact.push_back(t))
                 }

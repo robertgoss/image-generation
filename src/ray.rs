@@ -107,7 +107,7 @@ impl<'a, Scene> RenderScene<'a, Scene> where Scene : BoxedTraceSpace<'a> + std::
     fn trace_ray<Rng>(self : &Self, rng : &mut Rng, ray : &Ray, depth : u8) -> Colour
       where Rng : rand::Rng
     {
-        self.scene.find_best_contact(ray).map(
+        self.scene.find_best_contact(ray, &None).map(
             |contact| self.trace_contact(rng, ray, &contact, depth)
         ).unwrap_or(self.background(ray))
     }
