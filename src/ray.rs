@@ -8,7 +8,7 @@ use cgmath::{prelude::*, Matrix3};
 use cgmath::{point3, vec3, Point3};
 
 use json::JsonValue;
-use image::{GenericImage, Rgb, RgbImage};
+use image::{Rgb, RgbImage};
 
 use rand::{Rng, SeedableRng};
 
@@ -22,7 +22,7 @@ mod trace;
 use geometry::{Ray, Geometries};
 use materials::{Materials, rgb_lerp, rgb_scale};
 use crate::ray::materials::rgb_sum;
-use crate::ray::trace::{Contact, Entity, BSPTreeScene, BoxedTraceSpace, LinearScene, BSPTree};
+use crate::ray::trace::{Contact, Entity, BSPTreeScene, BoxedTraceSpace};
 
 // Helper to remember which we want to always be pre-unitized
 type Colour = Rgb<f64>;
@@ -30,8 +30,7 @@ type Colour = Rgb<f64>;
 struct Camera {
     fov : f64,
     pos  : Point3<f64>,
-    mat : Matrix3<f64>,
-    automatic : bool, // Fit the whole scene in camera
+    mat : Matrix3<f64>
 }
 
 struct RenderScene<'a,Scene>  where Scene : BoxedTraceSpace<'a> {
@@ -79,19 +78,17 @@ impl Camera {
             // we are pointing directly up align other with y
             let x = dir_vec.cross(vec3(0.0, 1.0, 0.0));
             let y = x.cross(dir_vec);
-            Matrix3{ x : x, y : y, z : dir_vec}
+            Matrix3{ x, y, z : dir_vec}
         } else {
             // we are pointing directly up align other with y
             let x = dir_vec.cross(vec3(0.0, 0.0, 1.0));
             let y = x.cross(dir_vec);
-            Matrix3{ x : x, y : y, z : dir_vec}
+            Matrix3{ x, y, z : dir_vec}
         };
-        let automatic = input["automatic"].as_bool().unwrap_or(false);
         Some(Camera {
-            pos : pos,
-            mat : mat,
-            fov : fov,
-            automatic : automatic
+            pos,
+            mat,
+            fov
         })
     }
 }
