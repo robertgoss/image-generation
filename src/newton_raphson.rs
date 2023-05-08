@@ -13,6 +13,9 @@ use std::f64::consts::PI;
 
 use std::{io::{Error, ErrorKind}, collections::HashMap};
 
+use wgpu::util::DeviceExt;
+
+
 struct ComplexPolynomial {
     coefficients : Vec<f64>
 }
@@ -157,7 +160,8 @@ struct NewtonRaphson {
     scale : f64,
     max_iterations : usize,
     convergence : f64,
-    use_colour : bool
+    use_colour : bool,
+    use_gpu : bool
 }
 
 impl NewtonRaphson {
@@ -173,15 +177,17 @@ impl NewtonRaphson {
         let convergence = input["convergence_size"].as_f64().unwrap_or(1e-10);
         let differential = polynomial.differentiate();
         let use_colour = input["colour"].as_bool().unwrap_or(false);
+        let use_gpu = input["gpu"].as_bool().unwrap_or(false);
         Ok(NewtonRaphson {
-            polynomial : polynomial,
-            differential : differential,
+            polynomial,
+            differential,
             resolution : (res_x, res_y),
             centre : (centre_x, centre_y),
-            scale : scale,
-            max_iterations : max_iterations,
-            convergence : convergence,
-            use_colour : use_colour
+            scale,
+            max_iterations,
+            convergence,
+            use_colour,
+            use_gpu
         })
     }
 
@@ -203,6 +209,79 @@ impl NewtonRaphson {
     }
 
     fn make_image(&self) -> RgbImage {
+        if self.use_gpu && !self.use_colour {
+            pollster::block_on(self.make_image_gpu())
+        } else {
+            self.make_image_cpu()
+        }
+    }
+
+    async fn make_image_gpu(&self) -> RgbImage {
+        // Do the calculation on the gpu
+        let mut img = RgbImage::new(
+            self.resolution.0 as u32,
+            self.resolution.1 as u32
+        );
+        // Setup the gpu renderer
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            dx12_shader_compiler: Default::default(),
+        });
+        let adapter = instance.request_adapter(
+            &wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            },
+        ).await.unwrap();
+        let (device, queue) = adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                features: wgpu::Features::empty(),
+                limits: wgpu::Limits::default(),
+                label: None
+            },
+            None, // Trace path
+        ).await.unwrap();
+        // Create a texture buffer.
+
+        // Create shader
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("newton_raphson.wgsl").into()),
+        });
+        let pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Pipeline Layout"),
+                bind_group_layouts: &[],
+                push_constant_ranges: &[],
+            });
+        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: Some(&pipeline_layout),
+            module: &module,
+            entry_point: "fs_main",
+        });
+        let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: input.len() as wgpu::BufferAddress,
+            // Can be read to the CPU, and can be copied from the shader's storage buffer
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let storage_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Collatz Conjecture Input"),
+            contents: input,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+        });
+
+
+        img
+    }
+
+    fn make_image_cpu(&self) -> RgbImage {
         let mut img = RgbImage::new(
             self.resolution.0 as u32, 
             self.resolution.1 as u32
