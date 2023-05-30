@@ -12,6 +12,7 @@ use std::cmp::Ordering;
 use std::f64::consts::PI;
 
 use std::{io::{Error, ErrorKind}, collections::HashMap};
+use std::io::{Read, repeat};
 
 use wgpu::util::DeviceExt;
 
@@ -222,6 +223,92 @@ impl NewtonRaphson {
             self.resolution.0 as u32,
             self.resolution.1 as u32
         );
+        // Setup the gpu renderer
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            dx12_shader_compiler: Default::default(),
+        });
+        let adapter = instance.request_adapter(
+            &wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            },
+        ).await.unwrap();
+        let (device, queue) = adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                features: wgpu::Features::empty(),
+                limits: wgpu::Limits::default(),
+                label: None
+            },
+            None, // Trace path
+        ).await.unwrap();
+        // Load the compute shader
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(include_str!("newton_raphson.wgsl").into()),
+        });
+        // Setup the buffer that the shader will output to with
+        //
+        // Input buffer that we will work with and copy out of
+        //
+        // NB can we just have an output buffer?
+        let input = vec![0 as u8; img.len()];
+        let input_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: &input,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+        });
+        let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: input.len() as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Specify the layout of buffers to the shader
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: Some(&compute_pipeline_layout),
+            module: &shader,
+            entry_point: "main",
+        });
+        // Actually bind the input
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input_buf.as_entire_binding(),
+            }],
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut cpass = encoder.begin_compute_pass(&Default::default());
+        cpass.set_pipeline(&pipeline);
+        cpass.set_bind_group(0, &bind_group, &[]);
+        cpass.dispatch_workgroups(self.resolution.0 as u32, self.resolution.1 as u32, 1);
+        encoder.copy_buffer_to_buffer(&input_buf, 0, &output_buf, 0, input.len() as u64);
+        queue.submit(Some(encoder.finish()));
+
 
         img
     }
