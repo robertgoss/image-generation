@@ -165,6 +165,14 @@ struct NewtonRaphson {
     use_gpu : bool
 }
 
+// Data to send to the GPU
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct NewtonRaphsonGPU {
+    res_x : u32,
+    res_y : u32
+}
+
 impl NewtonRaphson {
     fn from_json(input : &JsonValue) -> std::io::Result<NewtonRaphson> {
         let polynomial = ComplexPolynomial::from_json(&input["polynomial"])?;
@@ -219,9 +227,13 @@ impl NewtonRaphson {
 
     async fn make_image_gpu(&self) -> RgbImage {
         // Do the calculation on the gpu
+        let nr = NewtonRaphsonGPU{
+            res_x: self.resolution.0 as u32,
+            res_y: self.resolution.1 as u32,
+        };
         let mut img = RgbImage::new(
-            self.resolution.0 as u32,
-            self.resolution.1 as u32
+            nr.res_x,
+            nr.res_y
         );
         // Setup the gpu renderer
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -253,13 +265,20 @@ impl NewtonRaphson {
         // Input buffer that we will work with and copy out of
         //
         // NB can we just have an output buffer?
-        let input = vec![0 as u8; img.len()];
+        //
+        // Cant use a slice of the image directly due to alignment
+        let input = vec![0 as u8; (img.len() / 3) * 4];
         let input_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: &input,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC,
+        });
+        let nr_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::bytes_of(&nr),
+            usage: wgpu::BufferUsages::STORAGE
         });
         let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -275,6 +294,15 @@ impl NewtonRaphson {
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
                     min_binding_size: None,
                 },
@@ -299,6 +327,9 @@ impl NewtonRaphson {
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: input_buf.as_entire_binding(),
+            },wgpu::BindGroupEntry {
+                binding: 1,
+                resource: nr_buf.as_entire_binding(),
             }],
         });
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -317,13 +348,15 @@ impl NewtonRaphson {
         // Poll the device in a blocking manner so that our future resolves.
         device.poll(wgpu::Maintain::Wait);
         let data = buffer_slice.get_mapped_range();
-        // Remake image - ideally this should be a buffer rather than copy
-        for i in 0..self.resolution.0  {
-            for j in 0..self.resolution.1 {
-                let val = data[i*self.resolution.1 + j];
-                img.put_pixel(i as u32, j as u32, Rgb([val, val, val]));
+        // Copy into our image ideally we would have mapped this and it
+        // could be copied into?
+        data.chunks(4).enumerate().for_each(
+            |(index, col)| {
+                let x = index / self.resolution.1;
+                let y = index % self.resolution.1;
+                img.put_pixel(x as u32,y as u32,Rgb([col[0], col[1], col[2]]))
             }
-        }
+        );
         img
     }
 
