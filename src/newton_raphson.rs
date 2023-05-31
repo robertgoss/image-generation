@@ -170,7 +170,11 @@ struct NewtonRaphson {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct NewtonRaphsonGPU {
     res_x : u32,
-    res_y : u32
+    res_y : u32,
+    centre_x : f32,
+    centre_y : f32,
+    scale : f32,
+    convergence_sq : f32
 }
 
 impl NewtonRaphson {
@@ -230,6 +234,10 @@ impl NewtonRaphson {
         let nr = NewtonRaphsonGPU{
             res_x: self.resolution.0 as u32,
             res_y: self.resolution.1 as u32,
+            centre_x: self.centre.0 as f32,
+            centre_y: self.centre.1 as f32,
+            scale: self.scale as f32,
+            convergence_sq : (self.convergence * self.convergence) as f32
         };
         let mut img = RgbImage::new(
             nr.res_x,
