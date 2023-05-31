@@ -302,14 +302,28 @@ impl NewtonRaphson {
             }],
         });
         let mut encoder = device.create_command_encoder(&Default::default());
-        let mut cpass = encoder.begin_compute_pass(&Default::default());
-        cpass.set_pipeline(&pipeline);
-        cpass.set_bind_group(0, &bind_group, &[]);
-        cpass.dispatch_workgroups(self.resolution.0 as u32, self.resolution.1 as u32, 1);
+        // Scope the cpass
+        {
+            let mut cpass = encoder.begin_compute_pass(&Default::default());
+            cpass.set_pipeline(&pipeline);
+            cpass.set_bind_group(0, &bind_group, &[]);
+            cpass.dispatch_workgroups(self.resolution.0 as u32, self.resolution.1 as u32, 1);
+        }
         encoder.copy_buffer_to_buffer(&input_buf, 0, &output_buf, 0, input.len() as u64);
         queue.submit(Some(encoder.finish()));
-
-
+        // Wait for compute
+        let buffer_slice = output_buf.slice(..);
+        buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+        // Poll the device in a blocking manner so that our future resolves.
+        device.poll(wgpu::Maintain::Wait);
+        let data = buffer_slice.get_mapped_range();
+        // Remake image - ideally this should be a buffer rather than copy
+        for i in 0..self.resolution.0  {
+            for j in 0..self.resolution.1 {
+                let val = data[i*self.resolution.1 + j];
+                img.put_pixel(i as u32, j as u32, Rgb([val, val, val]));
+            }
+        }
         img
     }
 
