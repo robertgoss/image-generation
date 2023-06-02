@@ -1,0 +1,9 @@
+{
+  "algorithm" : "newton-raphson",
+  "polynomial" : [1, 0, 0, -1],
+  "resolution_x" : 4048,
+  "resolution_y" : 4048,
+  "max_iterations" : 128,
+  "size": 1.0,
+  "gpu" : true
+}

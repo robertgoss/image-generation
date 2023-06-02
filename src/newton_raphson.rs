@@ -30,6 +30,15 @@ impl ComplexPolynomial {
         Ok(ComplexPolynomial { coefficients: coefficients })
     }
 
+    fn coefficients_gpu(&self) -> [f32; 16] {
+        let mut coeff = [0_f32; 16];
+        assert!(self.coefficients.len() <= 16);
+        self.coefficients.iter().enumerate().for_each(
+            |(i, c)| coeff[i] = *c as f32
+        );
+        coeff
+    }
+
     fn differentiate(&self) -> ComplexPolynomial {
         ComplexPolynomial { 
             coefficients: self.coefficients.iter().enumerate().skip(1).map(
@@ -174,7 +183,10 @@ struct NewtonRaphsonGPU {
     centre_x : f32,
     centre_y : f32,
     scale : f32,
-    convergence_sq : f32
+    convergence_sq : f32,
+    coefficients : [f32; 16],
+    coefficients_derivative : [f32; 16],
+    max_iterations : u32
 }
 
 impl NewtonRaphson {
@@ -237,7 +249,10 @@ impl NewtonRaphson {
             centre_x: self.centre.0 as f32,
             centre_y: self.centre.1 as f32,
             scale: self.scale as f32,
-            convergence_sq : (self.convergence * self.convergence) as f32
+            convergence_sq : (self.convergence * self.convergence) as f32,
+            coefficients : self.polynomial.coefficients_gpu(),
+            coefficients_derivative: self.differential.coefficients_gpu(),
+            max_iterations: self.max_iterations as u32
         };
         let mut img = RgbImage::new(
             nr.res_x,
